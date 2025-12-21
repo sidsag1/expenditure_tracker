@@ -195,31 +195,33 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     border: Border.all(color: Colors.grey[700]!),
                   ),
                   child: DropdownButtonHideUnderline(
-                    value: _selectedCategory,
-                    style: const TextStyle(color: Colors.white),
-                    dropdownColor: const Color(0xFF1a1a2e),
-                    icon: Icon(Icons.category, color: Colors.grey[400]),
-                    items: [
-                      const DropdownMenuItem(value: 'all', child: Text('All Categories')),
-                      ..._categories.map((category) => DropdownMenuItem(
-                        value: category.name,
-                        child: Row(
-                          children: [
-                            Text(category.icon),
-                            const SizedBox(width: 8),
-                            Text(category.name),
-                          ],
-                        ),
-                      )),
-                    ],
-                    onChanged: (value) {
-                      if (value != null) {
-                        setState(() {
-                          _selectedCategory = value!;
-                        });
-                        _loadTransactions();
-                      }
-                    },
+                    child: DropdownButton(
+                      value: _selectedCategory,
+                      style: const TextStyle(color: Colors.white),
+                      dropdownColor: const Color(0xFF1a1a2e),
+                      icon: Icon(Icons.category, color: Colors.grey[400]),
+                      items: [
+                        const DropdownMenuItem(value: 'all', child: Text('All Categories')),
+                        ..._categories.map((category) => DropdownMenuItem(
+                          value: category.name,
+                          child: Row(
+                            children: [
+                              Text(category.icon),
+                              const SizedBox(width: 8),
+                              Text(category.name),
+                            ],
+                          ),
+                        )),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() {
+                            _selectedCategory = value!;
+                          });
+                          _loadTransactions();
+                        }
+                      },
+                    ),
                   ),
                 ),
               ),
@@ -236,25 +238,27 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     border: Border.all(color: Colors.grey[700]!),
                   ),
                   child: DropdownButtonHideUnderline(
-                    value: _selectedDateRange,
-                    style: const TextStyle(color: Colors.white),
-                    dropdownColor: const Color(0xFF1a1a2e),
-                    icon: Icon(Icons.date_range, color: Colors.grey[400]),
-                    items: const [
-                      DropdownMenuItem(value: 'all', child: Text('All Time')),
-                      DropdownMenuItem(value: 'today', child: Text('Today')),
-                      DropdownMenuItem(value: 'week', child: Text('This Week')),
-                      DropdownMenuItem(value: 'month', child: Text('This Month')),
-                      DropdownMenuItem(value: 'year', child: Text('This Year')),
-                    ],
-                    onChanged: (value) {
-                      if (value != null) {
-                        setState(() {
-                          _selectedDateRange = value!;
-                        });
-                        _loadTransactions();
-                      }
-                    },
+                    child: DropdownButton(
+                      value: _selectedDateRange,
+                      style: const TextStyle(color: Colors.white),
+                      dropdownColor: const Color(0xFF1a1a2e),
+                      icon: Icon(Icons.date_range, color: Colors.grey[400]),
+                      items: const [
+                        DropdownMenuItem(value: 'all', child: Text('All Time')),
+                        DropdownMenuItem(value: 'today', child: Text('Today')),
+                        DropdownMenuItem(value: 'week', child: Text('This Week')),
+                        DropdownMenuItem(value: 'month', child: Text('This Month')),
+                        DropdownMenuItem(value: 'year', child: Text('This Year')),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() {
+                            _selectedDateRange = value!;
+                          });
+                          _loadTransactions();
+                        }
+                      },
+                    ),
                   ),
                 ),
               ),
@@ -397,22 +401,22 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
               icon: Icon(Icons.more_vert, color: Colors.grey[600], size: 20),
               color: Colors.transparent,
               itemBuilder: (context) => [
-                const PopupMenuItem(
+                PopupMenuItem(
                   value: 'edit',
                   child: Row(
                     children: [
                       Icon(Icons.edit, color: Colors.grey[400], size: 16),
-                      const SizedBox(width: 8),
+                      SizedBox(width: 8),
                       Text('Edit'),
                     ],
                   ),
                 ),
-                const PopupMenuItem(
+                PopupMenuItem(
                   value: 'delete',
                   child: Row(
                     children: [
                       Icon(Icons.delete, color: Colors.red[400], size: 16),
-                      const SizedBox(width: 8),
+                      SizedBox(width: 8),
                       Text('Delete'),
                     ],
                   ),

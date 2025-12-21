@@ -19,6 +19,8 @@ class AddTransactionScreen extends StatefulWidget {
 }
 
 class _AddTransactionScreenState extends State<AddTransactionScreen> {
+  static const Color _grey600 = Color(0xFF9E9E9E);
+  
   final TransactionDAO _transactionDAO = TransactionDAO();
   final AccountDAO _accountDAO = AccountDAO();
   final CategoryDAO _categoryDAO = CategoryDAO();
@@ -248,7 +250,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               onChanged: (value) {
                 if (value != null) {
                   setState(() {
-                    _selectedTransactionType = value!;
+                    _selectedTransactionType = value;
                   });
                 }
               },
@@ -266,7 +268,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               onChanged: (value) {
                 if (value != null) {
                   setState(() {
-                    _selectedTransactionType = value!;
+                    _selectedTransactionType = value;
                   });
                 }
               },
@@ -286,7 +288,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: Colors.grey[700]!),
         ),
-        child: const Text(
+        child: Text(
           'No accounts found. Please add an account first.',
           style: TextStyle(color: Colors.grey[400]),
           textAlign: TextAlign.center,
@@ -301,14 +303,14 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         border: Border.all(color: Colors.grey[700]!),
       ),
       child: DropdownButtonFormField<Account>(
-        value: _selectedAccount,
+        initialValue: _selectedAccount,
         decoration: const InputDecoration(
           border: InputBorder.none,
           contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         ),
-        hint: const Text(
+        hint: Text(
           'Select account',
-          style: TextStyle(color: Colors.grey[600]),
+          style: TextStyle(color: _grey600),
         ),
         dropdownColor: const Color(0xFF1a1a2e),
         style: const TextStyle(color: Colors.white),
@@ -358,7 +360,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         hintText: 'Enter amount',
-        hintStyle: TextStyle(color: Colors.grey[600]),
+        hintStyle: TextStyle(color: _grey600),
         prefixIcon: Icon(Icons.currency_rupee, color: Colors.grey[400]),
         filled: true,
         fillColor: const Color(0xFF1a1a2e),
@@ -404,7 +406,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           '${_selectedDate.day}/${_selectedDate.month}/${_selectedDate.year}',
           style: const TextStyle(color: Colors.white),
         ),
-        trailing: const Icon(Icons.calendar_today, color: Colors.grey[400]),
+        trailing: Icon(Icons.calendar_today, color: Colors.grey[400]),
         onTap: _selectDate,
       ),
     );
@@ -416,7 +418,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         hintText: 'Enter description',
-        hintStyle: TextStyle(color: Colors.grey[600]),
+        hintStyle: TextStyle(color: _grey600),
         prefixIcon: Icon(Icons.description, color: Colors.grey[400]),
         filled: true,
         fillColor: const Color(0xFF1a1a2e),
@@ -448,7 +450,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         hintText: 'Enter merchant name',
-        hintStyle: TextStyle(color: Colors.grey[600]),
+        hintStyle: TextStyle(color: _grey600),
         prefixIcon: Icon(Icons.store, color: Colors.grey[400]),
         filled: true,
         fillColor: const Color(0xFF1a1a2e),
@@ -482,14 +484,14 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         border: Border.all(color: Colors.grey[700]!),
       ),
       child: DropdownButtonFormField<String>(
-        value: _selectedCategory,
+        initialValue: _selectedCategory,
         decoration: const InputDecoration(
           border: InputBorder.none,
           contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         ),
-        hint: const Text(
+        hint: Text(
           'Select category',
-          style: TextStyle(color: Colors.grey[600]),
+          style: TextStyle(color: _grey600),
         ),
         dropdownColor: const Color(0xFF1a1a2e),
         style: const TextStyle(color: Colors.white),
@@ -509,7 +511,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         onChanged: (value) {
           if (value != null) {
             setState(() {
-              _selectedCategory = value!;
+              _selectedCategory = value;
             });
           }
         },
@@ -523,7 +525,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         hintText: 'Enter reference number (optional)',
-        hintStyle: TextStyle(color: Colors.grey[600]),
+        hintStyle: TextStyle(color: _grey600),
         prefixIcon: Icon(Icons.tag, color: Colors.grey[400]),
         filled: true,
         fillColor: const Color(0xFF1a1a2e),
@@ -583,7 +585,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
     if (picked != null) {
       setState(() {
-        _selectedDate = picked!;
+        _selectedDate = picked;
       });
     }
   }

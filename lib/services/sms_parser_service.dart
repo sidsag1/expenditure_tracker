@@ -497,7 +497,106 @@ class SMSParserService {
         final day = int.parse(parts[0]);
         final month = int.parse(parts[1]);
         final year = int.parse('20${parts[2]}');
-        
         return DateTime(year, month, day);
       }
+    } catch (e) {
+      print('Error parsing SBI date: $dateStr');
     }
+    return DateTime.now();
+  }
+
+  DateTime _parseSBIUpiDate(String dateStr) {
+    try {
+      // Handle "30Sep24" format
+      final regex = RegExp(r'(\d{1,2})([A-Za-z]{3})(\d{2})');
+      final match = regex.firstMatch(dateStr);
+      if (match != null) {
+        final day = int.parse(match.group(1)!);
+        final month = _parseMonth(match.group(2)!);
+        final year = int.parse('20${match.group(3)!}');
+        return DateTime(year, month, day);
+      }
+    } catch (e) {
+      print('Error parsing SBI UPI date: $dateStr');
+    }
+    return DateTime.now();
+  }
+
+  DateTime _extractDate(String message) {
+    // Try various date patterns
+    final patterns = [
+      RegExp(r'(\d{1,2})-([A-Za-z]{3})-(\d{2})'),  // 30-Sep-25
+      RegExp(r'(\d{1,2})/(\d{1,2})/(\d{2,4})'),     // 30/09/25 or 30/09/2025
+      RegExp(r'(\d{1,2})\.(\d{1,2})\.(\d{2})'),     // 01.12.25
+    ];
+
+    for (final pattern in patterns) {
+      final match = pattern.firstMatch(message);
+      if (match != null) {
+        try {
+          final groups = match.groups([1, 2, 3]);
+          if (groups[0] != null && groups[1] != null && groups[2] != null) {
+            final day = int.parse(groups[0]!);
+            int month;
+            if (int.tryParse(groups[1]!) != null) {
+              month = int.parse(groups[1]!);
+            } else {
+              month = _parseMonth(groups[1]!);
+            }
+            int year = int.parse(groups[2]!);
+            if (year < 100) year += 2000;
+            return DateTime(year, month, day);
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+    }
+    return DateTime.now();
+  }
+
+  int _parseMonth(String monthStr) {
+    final months = {
+      'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+      'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+    };
+    return months[monthStr.toLowerCase()] ?? 1;
+  }
+
+  String? _extractMerchant(String message) {
+    // Try to extract merchant name from common patterns
+    final patterns = [
+      RegExp(r'at\s+(.+?)(?:\.|on|$)', caseSensitive: false),
+      RegExp(r'to\s+(.+?)(?:\.|on|$)', caseSensitive: false),
+      RegExp(r'from\s+(.+?)(?:\.|on|$)', caseSensitive: false),
+    ];
+
+    for (final pattern in patterns) {
+      final match = pattern.firstMatch(message);
+      if (match != null) {
+        final merchant = match.group(1)?.trim();
+        if (merchant != null && merchant.isNotEmpty && merchant.length < 100) {
+          return merchant;
+        }
+      }
+    }
+    return null;
+  }
+
+  String? _extractReferenceNumber(String message) {
+    final patterns = [
+      RegExp(r'Ref(?:\s+No\.?)?:?\s*(\d+)', caseSensitive: false),
+      RegExp(r'Refno\s*(\d+)', caseSensitive: false),
+      RegExp(r'UTR\s*(\d+)', caseSensitive: false),
+      RegExp(r'Txn\s*(?:ID|No\.?)?\s*:?\s*(\d+)', caseSensitive: false),
+    ];
+
+    for (final pattern in patterns) {
+      final match = pattern.firstMatch(message);
+      if (match != null) {
+        return match.group(1);
+      }
+    }
+    return null;
+  }
+}

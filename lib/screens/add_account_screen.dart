@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import '../models/account.dart';
 import '../database/account_dao.dart';
 
@@ -23,7 +22,7 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
   bool _isLoading = false;
   String _errorMessage = '';
 
-  final List<String> _accountTypes = [
+  final List<Map<String, dynamic>> _accountTypes = [
     {'value': 'bank_account', 'label': 'Bank Account', 'icon': Icons.account_balance},
     {'value': 'debit_card', 'label': 'Debit Card', 'icon': Icons.credit_card},
     {'value': 'credit_card', 'label': 'Credit Card', 'icon': Icons.credit_card},
@@ -238,7 +237,7 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
     );
   }
 
-  Widget _buildInputDecoration(String hint, IconData icon) {
+  InputDecoration _buildInputDecoration(String hint, IconData icon) {
     return InputDecoration(
       hintText: hint,
       hintStyle: TextStyle(color: Colors.grey[600]),
@@ -286,7 +285,7 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
         return GestureDetector(
           onTap: () {
             setState(() {
-              _selectedAccountType = type['value'] as String;
+              _selectedAccountType = type['value'];
             });
           },
           child: Container(
@@ -311,7 +310,7 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  type['label'] as String,
+                  type['label'],
                   style: TextStyle(
                     color: isSelected ? Colors.blue[400] : Colors.grey[300],
                     fontWeight: FontWeight.w500,

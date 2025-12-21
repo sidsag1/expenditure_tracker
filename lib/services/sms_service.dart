@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:sms/sms.dart';
 
 class SMSService {
   static final SMSService _instance = SMSService._internal();
@@ -12,8 +11,6 @@ class SMSService {
   static const String _lastSyncTimeKey = 'expenditure_tracker_last_sms_sync';
   
   late SharedPreferences _prefs;
-  late SmsReceiver _smsReceiver;
-  late SmsSender _smsSender;
 
   // Bank SMS sender numbers
   static const Map<String, List<String>> _bankSenderNumbers = {
@@ -40,14 +37,12 @@ class SMSService {
   // Initialize the service
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
-    _smsReceiver = SmsReceiver();
-    _smsSender = SmsSender();
   }
 
   // Check if SMS permission is granted
   Future<bool> isPermissionGranted() async {
     final status = await Permission.sms.status;
-    return status == PermissionStatus.granted;
+    return status.isGranted;
   }
 
   // Request SMS permission
@@ -57,31 +52,42 @@ class SMSService {
   }
 
   // Check if we should show permission rationale
-  bool shouldShowPermissionRationale() {
-    return Permission.sms.status == PermissionStatus.denied;
+  Future<bool> shouldShowPermissionRationale() async {
+    final status = await Permission.sms.status;
+    return status.isDenied;
   }
 
-  // Get all SMS messages from bank numbers
-  Future<List<SmsMessage>> getBankSMSMessages() async {
+  // Get all SMS messages from bank numbers (stub implementation)
+  Future<List<Map<String, dynamic>>> getBankSMSMessages() async {
     if (!await isPermissionGranted()) {
       throw Exception('SMS permission not granted');
     }
 
     try {
-      final senderNumbers = _getAllBankSenderNumbers();
-      final messages = await _smsReceiver.querySms(
-        kind: SmsQueryKind.Inbox,
-        address: senderNumbers,
-      );
-
-      return messages.where((message) => _isBankMessage(message)).toList();
+      // Mock implementation - in real app would query SMS
+      final testMessages = getTestSMSMessages();
+      final bankMessages = <Map<String, dynamic>>[];
+      
+      for (int i = 0; i < testMessages.length; i++) {
+        final message = testMessages[i];
+        if (_isBankMessage(message)) {
+          bankMessages.add({
+            'id': i + 1,
+            'sender': _extractSender(message),
+            'body': message,
+            'date': DateTime.now().subtract(Duration(days: i)).millisecondsSinceEpoch,
+          });
+        }
+      }
+      
+      return bankMessages;
     } catch (e) {
       throw Exception('Failed to read SMS messages: $e');
     }
   }
 
-  // Get SMS messages since last sync
-  Future<List<SmsMessage>> getNewSMSMessages() async {
+  // Get SMS messages since last sync (stub implementation)
+  Future<List<Map<String, dynamic>>> getNewSMSMessages() async {
     final lastSyncTime = _prefs.getInt(_lastSyncTimeKey) ?? 0;
     final now = DateTime.now().millisecondsSinceEpoch;
     
@@ -90,16 +96,10 @@ class SMSService {
     }
 
     try {
-      final senderNumbers = _getAllBankSenderNumbers();
-      final messages = await _smsReceiver.querySms(
-        kind: SmsQueryKind.Inbox,
-        address: senderNumbers,
-        startDate: DateTime.fromMillisecondsSinceEpoch(lastSyncTime),
-      );
-
-      return messages.where((message) => 
-        message.date!.millisecondsSinceEpoch > lastSyncTime && 
-        _isBankMessage(message)
+      // Mock implementation - in real app would query SMS with date filter
+      final allMessages = await getBankSMSMessages();
+      return allMessages.where((message) => 
+        (message['date'] as int) > lastSyncTime
       ).toList();
     } catch (e) {
       throw Exception('Failed to read new SMS messages: $e');
@@ -113,20 +113,24 @@ class SMSService {
   }
 
   // Check if message is from a bank
-  bool _isBankMessage(SmsMessage message) {
-    if (message.sender == null) return false;
-    
-    final sender = message.sender!.toUpperCase().trim();
+  bool _isBankMessage(String message) {
+    if (message.isEmpty) return false;
     
     for (final bankNumbers in _bankSenderNumbers.values) {
       for (final number in bankNumbers) {
-        if (sender.contains(number.toUpperCase())) {
+        if (message.toUpperCase().contains(number.toUpperCase())) {
           return true;
         }
       }
     }
     
     return false;
+  }
+
+  // Extract sender from message
+  String _extractSender(String message) {
+    final words = message.split(' ');
+    return words.isNotEmpty ? words[0] : 'UNKNOWN';
   }
 
   // Get all bank sender numbers
@@ -153,32 +157,20 @@ class SMSService {
     return null;
   }
 
-  // Stream for real-time SMS messages
-  Stream<SmsMessage>? get smsStream {
-    if (!Platform.isAndroid) return null;
-    
-    try {
-      return _smsReceiver.onSmsReceived;
-    } catch (e) {
-      return null;
-    }
+  // Stream for real-time SMS messages (stub implementation)
+  Stream<Map<String, dynamic>>? get smsStream {
+    // Mock implementation - in real app would provide actual SMS stream
+    return null;
   }
 
-  // Set up SMS listener
-  void listenToNewSMS(Function(SmsMessage) onNewMessage) {
-    if (!Platform.isAndroid) return;
-    
-    _smsReceiver.onSmsReceived.listen((SmsMessage message) {
-      if (_isBankMessage(message)) {
-        onNewMessage(message);
-      }
-    });
+  // Set up SMS listener (stub implementation)
+  void listenToNewSMS(Function(Map<String, dynamic>) onNewMessage) {
+    // Mock implementation - in real app would set up SMS listener
   }
 
   // Stop listening to SMS
   void stopListening() {
-    // SMS receiver doesn't have explicit stop method, but we can dispose
-    // In a real implementation, you might want to store the stream subscription
+    // Mock implementation - in real app would stop SMS listener
   }
 
   // Get permission status

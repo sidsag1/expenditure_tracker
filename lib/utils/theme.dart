@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 class AppColors {
   // Primary colors
@@ -55,7 +56,7 @@ class AppTheme {
       ),
       
       // Card Theme
-      cardTheme: CardTheme(
+      cardTheme: CardThemeData(
         color: AppColors.cardColor,
         elevation: 4,
         shape: RoundedRectangleBorder(
@@ -250,7 +251,7 @@ class AppTheme {
       ),
       
       // Dialog Theme
-      dialogTheme: DialogTheme(
+      dialogTheme: DialogThemeData(
         backgroundColor: AppColors.surfaceColor,
         elevation: 8,
         shape: RoundedRectangleBorder(

@@ -5,7 +5,6 @@ import '../database/account_dao.dart';
 import '../database/transaction_dao.dart';
 import '../screens/account_management_screen.dart';
 import '../screens/transactions_screen.dart';
-import 'add_transaction_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -90,8 +89,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       floatingActionButton: FloatingActionButton(
         onPressed: _navigateToTransactions,
         backgroundColor: Colors.blue[400],
-        child: const Icon(Icons.add, color: Colors.white),
         tooltip: 'Add Transaction',
+        child: const Icon(Icons.add, color: Colors.white),
       ),
     );
   }

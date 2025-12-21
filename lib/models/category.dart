@@ -7,115 +7,119 @@ class Category {
   final DateTime createdAt;
   final DateTime updatedAt;
 
-  const Category({
+  Category({
     this.id,
     required this.name,
     required this.icon,
     required this.color,
     this.isCustom = false,
-    required this.createdAt,
-    required this.updatedAt,
-  });
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) : createdAt = createdAt ?? DateTime.now(),
+       updatedAt = updatedAt ?? DateTime.now();
 
   // Predefined categories
-  static const List<Category> predefinedCategories = [
-    Category(
-      name: 'Food & Dining',
-      icon: '🍽️',
-      color: '#FF6B6B',
-      isCustom: false,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    ),
-    Category(
-      name: 'Transportation',
-      icon: '🚗',
-      color: '#4ECDC4',
-      isCustom: false,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    ),
-    Category(
-      name: 'Shopping',
-      icon: '🛍️',
-      color: '#45B7D1',
-      isCustom: false,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    ),
-    Category(
-      name: 'Entertainment',
-      icon: '🎬',
-      color: '#96CEB4',
-      isCustom: false,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    ),
-    Category(
-      name: 'Bills & Utilities',
-      icon: '💡',
-      color: '#FFEAA7',
-      isCustom: false,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    ),
-    Category(
-      name: 'Health & Medical',
-      icon: '🏥',
-      color: '#DDA0DD',
-      isCustom: false,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    ),
-    Category(
-      name: 'Education',
-      icon: '📚',
-      color: '#74B9FF',
-      isCustom: false,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    ),
-    Category(
-      name: 'Travel',
-      icon: '✈️',
-      color: '#00B894',
-      isCustom: false,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    ),
-    Category(
-      name: 'Groceries',
-      icon: '🛒',
-      color: '#00CEC9',
-      isCustom: false,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    ),
-    Category(
-      name: 'Business',
-      icon: '💼',
-      color: '#636E72',
-      isCustom: false,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    ),
-    Category(
-      name: 'Investment',
-      icon: '📈',
-      color: '#FDCB6E',
-      isCustom: false,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    ),
-    Category(
-      name: 'Uncategorized',
-      icon: '💰',
-      color: '#B2BEC3',
-      isCustom: false,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    ),
-  ];
+  static List<Category> get predefinedCategories {
+    final now = DateTime.now();
+    return [
+      Category(
+        name: 'Food & Dining',
+        icon: '🍽️',
+        color: '#FF6B6B',
+        isCustom: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      Category(
+        name: 'Transportation',
+        icon: '🚗',
+        color: '#4ECDC4',
+        isCustom: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      Category(
+        name: 'Shopping',
+        icon: '🛍️',
+        color: '#45B7D1',
+        isCustom: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      Category(
+        name: 'Entertainment',
+        icon: '🎬',
+        color: '#96CEB4',
+        isCustom: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      Category(
+        name: 'Bills & Utilities',
+        icon: '💡',
+        color: '#FFEAA7',
+        isCustom: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      Category(
+        name: 'Health & Medical',
+        icon: '🏥',
+        color: '#DDA0DD',
+        isCustom: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      Category(
+        name: 'Education',
+        icon: '📚',
+        color: '#74B9FF',
+        isCustom: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      Category(
+        name: 'Travel',
+        icon: '✈️',
+        color: '#00B894',
+        isCustom: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      Category(
+        name: 'Groceries',
+        icon: '🛒',
+        color: '#00CEC9',
+        isCustom: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      Category(
+        name: 'Business',
+        icon: '💼',
+        color: '#636E72',
+        isCustom: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      Category(
+        name: 'Investment',
+        icon: '📈',
+        color: '#FDCB6E',
+        isCustom: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      Category(
+        name: 'Uncategorized',
+        icon: '💰',
+        color: '#B2BEC3',
+        isCustom: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+    ];
+  }
 
   // Convert Category object to Map for database operations
   Map<String, dynamic> toMap() {
@@ -138,8 +142,8 @@ class Category {
       icon: map['icon'],
       color: map['color'],
       isCustom: map['is_custom'] == 1,
-      createdAt: DateTime.parse(map['created_at']),
-      updatedAt: DateTime.parse(map['updated_at']),
+      createdAt: map['created_at'] != null ? DateTime.parse(map['created_at']) : null,
+      updatedAt: map['updated_at'] != null ? DateTime.parse(map['updated_at']) : null,
     );
   }
 

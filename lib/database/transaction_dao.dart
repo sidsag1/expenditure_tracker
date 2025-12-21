@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'package:sqflite/sqflite.dart';
 import 'database_helper.dart';
-import '../models/transaction.dart';
+import '../models/transaction.dart' as models;
 
 class TransactionDAO {
   final DatabaseHelper _dbHelper = DatabaseHelper();
 
   // Create a new transaction
-  Future<int> insertTransaction(Transaction transaction) async {
+  Future<int> insertTransaction(models.Transaction transaction) async {
     final db = await _dbHelper.database;
     return await db.insert(
       'transactions',
@@ -17,7 +17,7 @@ class TransactionDAO {
   }
 
   // Insert or ignore if transaction ID already exists (for duplicate prevention)
-  Future<int> insertOrIgnoreTransaction(Transaction transaction) async {
+  Future<int> insertOrIgnoreTransaction(models.Transaction transaction) async {
     final db = await _dbHelper.database;
     return await db.insert(
       'transactions',
@@ -27,7 +27,7 @@ class TransactionDAO {
   }
 
   // Get all transactions
-  Future<List<Transaction>> getAllTransactions() async {
+  Future<List<models.Transaction>> getAllTransactions() async {
     final db = await _dbHelper.database;
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
@@ -35,12 +35,12 @@ class TransactionDAO {
     );
     
     return List.generate(maps.length, (i) {
-      return Transaction.fromMap(maps[i]);
+      return models.Transaction.fromMap(maps[i]);
     });
   }
 
   // Get transactions by account
-  Future<List<Transaction>> getTransactionsByAccount(int accountId) async {
+  Future<List<models.Transaction>> getTransactionsByAccount(int accountId) async {
     final db = await _dbHelper.database;
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
@@ -50,12 +50,12 @@ class TransactionDAO {
     );
     
     return List.generate(maps.length, (i) {
-      return Transaction.fromMap(maps[i]);
+      return models.Transaction.fromMap(maps[i]);
     });
   }
 
   // Get transactions by date range
-  Future<List<Transaction>> getTransactionsByDateRange(
+  Future<List<models.Transaction>> getTransactionsByDateRange(
     DateTime startDate,
     DateTime endDate,
   ) async {
@@ -71,12 +71,12 @@ class TransactionDAO {
     );
     
     return List.generate(maps.length, (i) {
-      return Transaction.fromMap(maps[i]);
+      return models.Transaction.fromMap(maps[i]);
     });
   }
 
   // Get transactions by category
-  Future<List<Transaction>> getTransactionsByCategory(String category) async {
+  Future<List<models.Transaction>> getTransactionsByCategory(String category) async {
     final db = await _dbHelper.database;
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
@@ -86,12 +86,12 @@ class TransactionDAO {
     );
     
     return List.generate(maps.length, (i) {
-      return Transaction.fromMap(maps[i]);
+      return models.Transaction.fromMap(maps[i]);
     });
   }
 
   // Get transactions by bank
-  Future<List<Transaction>> getTransactionsByBank(String bankName) async {
+  Future<List<models.Transaction>> getTransactionsByBank(String bankName) async {
     final db = await _dbHelper.database;
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
@@ -101,12 +101,12 @@ class TransactionDAO {
     );
     
     return List.generate(maps.length, (i) {
-      return Transaction.fromMap(maps[i]);
+      return models.Transaction.fromMap(maps[i]);
     });
   }
 
   // Get recent transactions (last N transactions)
-  Future<List<Transaction>> getRecentTransactions({int limit = 10}) async {
+  Future<List<models.Transaction>> getRecentTransactions({int limit = 10}) async {
     final db = await _dbHelper.database;
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
@@ -115,12 +115,12 @@ class TransactionDAO {
     );
     
     return List.generate(maps.length, (i) {
-      return Transaction.fromMap(maps[i]);
+      return models.Transaction.fromMap(maps[i]);
     });
   }
 
   // Get transaction by ID
-  Future<Transaction?> getTransactionById(int id) async {
+  Future<models.Transaction?> getTransactionById(int id) async {
     final db = await _dbHelper.database;
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
@@ -129,13 +129,13 @@ class TransactionDAO {
     );
     
     if (maps.isNotEmpty) {
-      return Transaction.fromMap(maps.first);
+      return models.Transaction.fromMap(maps.first);
     }
     return null;
   }
 
   // Get transaction by transaction ID (for duplicate detection)
-  Future<Transaction?> getTransactionByTransactionId(String transactionId) async {
+  Future<models.Transaction?> getTransactionByTransactionId(String transactionId) async {
     final db = await _dbHelper.database;
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
@@ -144,13 +144,13 @@ class TransactionDAO {
     );
     
     if (maps.isNotEmpty) {
-      return Transaction.fromMap(maps.first);
+      return models.Transaction.fromMap(maps.first);
     }
     return null;
   }
 
   // Update transaction
-  Future<int> updateTransaction(Transaction transaction) async {
+  Future<int> updateTransaction(models.Transaction transaction) async {
     final db = await _dbHelper.database;
     return await db.update(
       'transactions',
@@ -336,7 +336,7 @@ class TransactionDAO {
   }
 
   // Search transactions by description or merchant
-  Future<List<Transaction>> searchTransactions(String query) async {
+  Future<List<models.Transaction>> searchTransactions(String query) async {
     final db = await _dbHelper.database;
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
@@ -346,12 +346,12 @@ class TransactionDAO {
     );
     
     return List.generate(maps.length, (i) {
-      return Transaction.fromMap(maps[i]);
+      return models.Transaction.fromMap(maps[i]);
     });
   }
 
   // Get transactions for a specific month and year
-  Future<List<Transaction>> getTransactionsByMonth(int year, int month) async {
+  Future<List<models.Transaction>> getTransactionsByMonth(int year, int month) async {
     final db = await _dbHelper.database;
     final startDate = DateTime(year, month, 1);
     final endDate = DateTime(year, month + 1, 0, 23, 59, 59);
@@ -367,7 +367,7 @@ class TransactionDAO {
     );
     
     return List.generate(maps.length, (i) {
-      return Transaction.fromMap(maps[i]);
+      return models.Transaction.fromMap(maps[i]);
     });
   }
 

@@ -7,6 +7,7 @@ import '../models/category.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper _instance = DatabaseHelper._internal();
+  static DatabaseHelper get instance => _instance;
   factory DatabaseHelper() => _instance;
   DatabaseHelper._internal();
 

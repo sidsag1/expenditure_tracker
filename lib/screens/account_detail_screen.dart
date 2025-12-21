@@ -3,7 +3,6 @@ import '../models/account.dart';
 import '../models/transaction.dart';
 import '../database/account_dao.dart';
 import '../database/transaction_dao.dart';
-import 'transaction_detail_screen.dart';
 
 class AccountDetailScreen extends StatefulWidget {
   final Account account;

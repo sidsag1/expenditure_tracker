@@ -52,59 +52,77 @@ class ExpenditureTrackerApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
       initialRoute: '/splash',
-      routes: {
-        '/splash': (context) => const SplashScreen(),
-        '/onboarding': (context) => const OnboardingScreen(),
-        '/pin_setup': (context) => const PinSetupScreen(
-          isFirstTime: true,
-          onComplete: () async {
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setBool('has_seen_onboarding', true);
-          },
-        ),
-        '/pin_entry': (context) => const PinEntryScreen(
-          onSuccess: () {
-            Navigator.of(context).pushReplacementNamed('/dashboard');
-          },
-        ),
-        '/sms_permission': (context) => const SMSPermissionScreen(
-          onPermissionGranted: () {
-            Navigator.of(context).pushReplacementNamed('/accounts');
-          },
-          onPermissionDenied: () {
-            Navigator.of(context).pushReplacementNamed('/accounts');
-          },
-        ),
-        '/dashboard': (context) => const DashboardScreen(),
-        '/accounts': (context) => const AccountManagementScreen(),
-        '/add_account': (context) => const AddAccountScreen(),
-        '/account_detail': (context) => const AccountDetailScreen(
-          account: Account(
-            id: 1,
-            accountType: 'bank_account',
-            bankName: 'ICICI',
-            accountNumber: 'XX1234',
-            accountName: 'Primary Account',
-            currentBalance: 50000.0,
-          ),
-        ),
-        '/transactions': (context) => const TransactionsScreen(),
-        '/add_transaction': (context) => const AddTransactionScreen(
-          transaction: Transaction(
-            id: 1,
-            transactionType: 'debit',
-            amount: 500.0,
-            description: 'Sample Restaurant Expense',
-            transactionDate: DateTime.now(),
-            category: 'Food & Dining',
-            bankName: 'ICICI',
-            accountType: 'bank_account',
-            isManual: true,
-            createdAt: DateTime.now(),
-            updatedAt: DateTime.now(),
-          ),
-        ),
-        '/reports': (context) => const ReportsScreen(),
+      onGenerateRoute: (settings) {
+        switch (settings.name) {
+          case '/splash':
+            return MaterialPageRoute(builder: (_) => const SplashScreen());
+          case '/onboarding':
+            return MaterialPageRoute(builder: (_) => const OnboardingScreen());
+          case '/pin_setup':
+            return MaterialPageRoute(
+              builder: (_) => PinSetupScreen(
+                isFirstTime: true,
+                onComplete: () async {
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool('has_seen_onboarding', true);
+                },
+              ),
+            );
+          case '/pin_entry':
+            return MaterialPageRoute(
+              builder: (context) => PinEntryScreen(
+                onSuccess: () {
+                  Navigator.of(context).pushReplacementNamed('/dashboard');
+                },
+              ),
+            );
+          case '/sms_permission':
+            return MaterialPageRoute(
+              builder: (context) => SMSPermissionScreen(
+                onPermissionGranted: () {
+                  Navigator.of(context).pushReplacementNamed('/accounts');
+                },
+                onPermissionDenied: () {
+                  Navigator.of(context).pushReplacementNamed('/accounts');
+                },
+              ),
+            );
+          case '/dashboard':
+            return MaterialPageRoute(builder: (_) => const DashboardScreen());
+          case '/accounts':
+            return MaterialPageRoute(builder: (_) => const AccountManagementScreen());
+          case '/add_account':
+            return MaterialPageRoute(builder: (_) => const AddAccountScreen());
+          case '/account_detail':
+            final account = settings.arguments as Account?;
+            return MaterialPageRoute(
+              builder: (_) => AccountDetailScreen(
+                account: account ?? Account(
+                  id: 1,
+                  accountType: 'bank_account',
+                  bankName: 'ICICI',
+                  accountNumber: 'XX1234',
+                  accountName: 'Primary Account',
+                  currentBalance: 50000.0,
+                  createdAt: DateTime.now(),
+                  updatedAt: DateTime.now(),
+                ),
+              ),
+            );
+          case '/transactions':
+            return MaterialPageRoute(builder: (_) => const TransactionsScreen());
+          case '/add_transaction':
+            final transaction = settings.arguments as Transaction?;
+            return MaterialPageRoute(
+              builder: (_) => AddTransactionScreen(
+                transaction: transaction,
+              ),
+            );
+          case '/reports':
+            return MaterialPageRoute(builder: (_) => const ReportsScreen());
+          default:
+            return MaterialPageRoute(builder: (_) => const SplashScreen());
+        }
       },
       home: _buildDevelopmentScreen(),
     );
@@ -118,17 +136,17 @@ Widget _buildDevelopmentScreen() {
       title: const Text('Expenditure Tracker - Development Mode'),
       backgroundColor: AppColors.primaryColor,
     ),
-    body: const Center(
+    body: Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
+          const Icon(
             Icons.code,
             size: 64,
             color: Colors.green,
           ),
-          SizedBox(height: 20),
-          Text(
+          const SizedBox(height: 20),
+          const Text(
             'Expenditure Tracker - Development Mode',
             style: TextStyle(
               fontSize: 24,
@@ -136,15 +154,15 @@ Widget _buildDevelopmentScreen() {
               color: Colors.white,
             ),
           ),
-          SizedBox(height: 10),
-          Text(
+          const SizedBox(height: 10),
+          const Text(
             'All features have been implemented!',
             style: TextStyle(
               fontSize: 16,
               color: Colors.grey,
             ),
           ),
-          SizedBox(height: 20),
+          const SizedBox(height: 20),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
