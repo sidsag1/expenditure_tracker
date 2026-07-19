@@ -26,6 +26,62 @@ class TransactionDAO {
     );
   }
 
+  // True if a transaction with the same account, type, amount and calendar
+  // day already exists. Banks often send two SMSes for one event (e.g. a
+  // credit card payment confirmation plus a "credited to your card" message),
+  // so such a near-duplicate is treated as the same transaction — unless both
+  // carry different reference numbers, which marks them as separate events.
+  Future<bool> hasSimilarTransaction(models.Transaction transaction) async {
+    if (transaction.accountId == null) return false;
+
+    final db = await _dbHelper.database;
+    final day = transaction.transactionDate;
+    final dayStart = DateTime(day.year, day.month, day.day);
+    final dayEnd = dayStart.add(const Duration(days: 1));
+
+    final rows = await db.query(
+      'transactions',
+      where: 'account_id = ? AND transaction_type = ? AND amount = ? '
+          'AND transaction_date >= ? AND transaction_date < ?',
+      whereArgs: [
+        transaction.accountId,
+        transaction.transactionType,
+        transaction.amount,
+        dayStart.toIso8601String(),
+        dayEnd.toIso8601String(),
+      ],
+    );
+
+    for (final row in rows) {
+      final existingRef = row['reference_number'] as String?;
+      final newRef = transaction.referenceNumber;
+      if (existingRef == null || newRef == null || existingRef == newRef) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Delete SMS-imported transactions that were never linked to a registered
+  // account (saved by builds that predate account matching).
+  Future<int> deleteUnlinkedAutoTransactions() async {
+    final db = await _dbHelper.database;
+    return await db.delete(
+      'transactions',
+      where: 'is_manual = 0 AND account_id IS NULL',
+    );
+  }
+
+  // Delete ALL SMS-imported transactions. Used for a one-time clean
+  // re-import after parser fixes; manual entries are untouched.
+  Future<int> deleteAutoImportedTransactions() async {
+    final db = await _dbHelper.database;
+    return await db.delete(
+      'transactions',
+      where: 'is_manual = 0',
+    );
+  }
+
   // Get all transactions
   Future<List<models.Transaction>> getAllTransactions() async {
     final db = await _dbHelper.database;

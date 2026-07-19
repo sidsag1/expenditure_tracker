@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../database/transaction_dao.dart';
 import '../models/transaction.dart';
+import '../utils/formatters.dart';
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -271,7 +272,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              '₹${amount.toStringAsFixed(2)}',
+              formatINR(amount),
               style: TextStyle(
                 color: color,
                 fontSize: 24,
@@ -342,7 +343,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '₹${amount.toStringAsFixed(2)}',
+                  formatINR(amount),
                   style: TextStyle(
                     color: Colors.grey[300],
                     fontSize: 16,

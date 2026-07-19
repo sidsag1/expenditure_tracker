@@ -1,7 +1,9 @@
 import 'dart:async';
-import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../database/transaction_dao.dart';
+import 'sms_parser_service.dart';
 
 class SMSService {
   static final SMSService _instance = SMSService._internal();
@@ -9,29 +11,43 @@ class SMSService {
   SMSService._internal();
 
   static const String _lastSyncTimeKey = 'expenditure_tracker_last_sms_sync';
-  
+
+  // Bump the suffix whenever parser fixes require discarding previously
+  // imported transactions and re-importing the inbox from scratch.
+  static const String _reimportFlagKey = 'expenditure_tracker_reimport_v4';
+
+  // Native channel for reading the device SMS inbox (see MainActivity.kt)
+  static const MethodChannel _channel =
+      MethodChannel('com.example.expenditure_tracker/sms');
+
   late SharedPreferences _prefs;
 
-  // Bank SMS sender numbers
+  // Brand substrings matched against SMS sender IDs. Senders vary by
+  // telecom route and service (e.g. AD-ICICIB-S, VM-ICICIT, JD-HDFCBK-S),
+  // so match on the brand fragment rather than exact sender IDs.
   static const Map<String, List<String>> _bankSenderNumbers = {
-    'ICICI': ['ICICIB', 'ICICIBK', 'ICICIL'],
-    'Kotak': ['KOTAKB', 'KOTAKL', 'KOTAKM'],
-    'SBI': ['SBIPSG', 'SBIPSGB', 'SBI', 'SBIN'],
-    'HDFC': ['HDFCB', 'HDFCL', 'HDFCBK'],
-    'Axis Bank': ['AXISB', 'AXISL', 'AXISBK'],
-    'Bank of Baroda': ['BOB', 'BOBPSG', 'BOBPSGB'],
-    'Punjab National Bank': ['PNB', 'PNBPSG', 'PNBPSGB'],
+    'ICICI': ['ICICI'],
+    'Kotak': ['KOTAK'],
+    'SBI': ['SBI'],
+    'HDFC': ['HDFC'],
+    'Axis Bank': ['AXIS'],
+    'Bank of Baroda': ['BOB'],
+    'Punjab National Bank': ['PNB'],
     'Canara Bank': ['CNRB', 'CANBK'],
-    'IDBI Bank': ['IDBIB', 'IDBIBK'],
-    'Yes Bank': ['YESB', 'YESL'],
-    'IndusInd Bank': ['INDB', 'INDBL'],
-    'Federal Bank': ['FEDBNK', 'FEDB'],
-    'RBL Bank': ['RBLB', 'RBLL'],
-    'South Indian Bank': ['SOUTHB', 'SOUTHL'],
+    'IDBI Bank': ['IDBI'],
+    'Yes Bank': ['YESB'],
+    'IndusInd Bank': ['INDB'],
+    'Federal Bank': ['FEDB'],
+    'RBL Bank': ['RBLB'],
+    'South Indian Bank': ['SOUTHB'],
     'Amazon Pay': ['AMZPAY', 'AMAZON'],
     'Google Pay': ['GPAY', 'GOOGPAY'],
     'PhonePe': ['PHONEPE', 'PPLTFIP'],
     'Paytm': ['PYTM', 'PTYM'],
+    'Blinkit': ['BLNKIT', 'BLINKIT'],
+    'Zepto': ['ZEPTO'],
+    'MobiKwik': ['MOBIKWIK', 'MBKWIK'],
+    'Freecharge': ['FREECHARGE', 'FRECHG'],
   };
 
   // Initialize the service
@@ -57,89 +73,94 @@ class SMSService {
     return status.isDenied;
   }
 
-  // Get all SMS messages from bank numbers (stub implementation)
-  Future<List<Map<String, dynamic>>> getBankSMSMessages() async {
+  // Query the device SMS inbox via the native platform channel.
+  // Returns every inbox message newer than [since] (epoch millis; 0 = all).
+  Future<List<Map<String, dynamic>>> getInboxMessages({int since = 0}) async {
     if (!await isPermissionGranted()) {
       throw Exception('SMS permission not granted');
     }
 
     try {
-      // Mock implementation - in real app would query SMS
-      final testMessages = getTestSMSMessages();
-      final bankMessages = <Map<String, dynamic>>[];
-      
-      for (int i = 0; i < testMessages.length; i++) {
-        final message = testMessages[i];
-        if (_isBankMessage(message)) {
-          bankMessages.add({
-            'id': i + 1,
-            'sender': _extractSender(message),
-            'body': message,
-            'date': DateTime.now().subtract(Duration(days: i)).millisecondsSinceEpoch,
-          });
-        }
-      }
-      
-      return bankMessages;
-    } catch (e) {
-      throw Exception('Failed to read SMS messages: $e');
+      final List<dynamic> raw =
+          await _channel.invokeMethod('getInboxSms', {'since': since});
+      return raw
+          .map((m) => Map<String, dynamic>.from(m as Map))
+          .toList();
+    } on PlatformException catch (e) {
+      throw Exception('Failed to read SMS messages: ${e.message}');
     }
   }
 
-  // Get SMS messages since last sync (stub implementation)
+  // Get all SMS messages from known bank/wallet senders
+  Future<List<Map<String, dynamic>>> getBankSMSMessages({int since = 0}) async {
+    final allMessages = await getInboxMessages(since: since);
+    return allMessages
+        .where((m) =>
+            getBankNameFromSender((m['sender'] as String?) ?? '') != null)
+        .toList();
+  }
+
+  // Get bank SMS messages received since the last sync
   Future<List<Map<String, dynamic>>> getNewSMSMessages() async {
     final lastSyncTime = _prefs.getInt(_lastSyncTimeKey) ?? 0;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    
+    return getBankSMSMessages(since: lastSyncTime);
+  }
+
+  // Read the inbox, parse every bank message into a transaction, and save it.
+  // The whole inbox is processed on every sync so that messages for an
+  // account the user registered later are still picked up; duplicates are
+  // skipped via a deterministic per-message transaction ID, and only
+  // messages matching a registered account are saved.
+  // Returns the number of newly saved transactions.
+  Future<int> syncMessages({bool fullSync = false}) async {
     if (!await isPermissionGranted()) {
-      throw Exception('SMS permission not granted');
+      return 0;
     }
 
-    try {
-      // Mock implementation - in real app would query SMS with date filter
-      final allMessages = await getBankSMSMessages();
-      return allMessages.where((message) => 
-        (message['date'] as int) > lastSyncTime
-      ).toList();
-    } catch (e) {
-      throw Exception('Failed to read new SMS messages: $e');
+    // One-time clean re-import: older builds saved promotional messages and
+    // wrong dates. Drop all auto-imported rows once; the full-inbox sync
+    // below re-imports everything through the current parser.
+    if (!(_prefs.getBool(_reimportFlagKey) ?? false)) {
+      await TransactionDAO().deleteAutoImportedTransactions();
+      await _prefs.setBool(_reimportFlagKey, true);
     }
+
+    // Remove imports from older builds that saved transactions without
+    // checking for a registered account.
+    await TransactionDAO().deleteUnlinkedAutoTransactions();
+
+    final messages = await getBankSMSMessages();
+    final parser = SMSParserService();
+
+    int saved = 0;
+    for (final message in messages) {
+      final sender = (message['sender'] as String?) ?? '';
+      final body = (message['body'] as String?) ?? '';
+      if (body.isEmpty) continue;
+
+      // When the body has no date (typical for wallet SMSes), the parser
+      // falls back to when the SMS was received.
+      final epochMillis = (message['date'] as num?)?.toInt();
+      final receivedAt = epochMillis != null && epochMillis > 0
+          ? DateTime.fromMillisecondsSinceEpoch(epochMillis)
+          : null;
+
+      final transaction =
+          await parser.parseSMS(body, sender, receivedAt: receivedAt);
+      if (transaction != null &&
+          await parser.saveTransaction(transaction, sourceMessage: body)) {
+        saved++;
+      }
+    }
+
+    await updateLastSyncTime();
+    return saved;
   }
 
   // Update last sync time
   Future<void> updateLastSyncTime() async {
     final now = DateTime.now().millisecondsSinceEpoch;
     await _prefs.setInt(_lastSyncTimeKey, now);
-  }
-
-  // Check if message is from a bank
-  bool _isBankMessage(String message) {
-    if (message.isEmpty) return false;
-    
-    for (final bankNumbers in _bankSenderNumbers.values) {
-      for (final number in bankNumbers) {
-        if (message.toUpperCase().contains(number.toUpperCase())) {
-          return true;
-        }
-      }
-    }
-    
-    return false;
-  }
-
-  // Extract sender from message
-  String _extractSender(String message) {
-    final words = message.split(' ');
-    return words.isNotEmpty ? words[0] : 'UNKNOWN';
-  }
-
-  // Get all bank sender numbers
-  List<String> _getAllBankSenderNumbers() {
-    final List<String> allNumbers = [];
-    for (final numbers in _bankSenderNumbers.values) {
-      allNumbers.addAll(numbers);
-    }
-    return allNumbers;
   }
 
   // Get sender bank name

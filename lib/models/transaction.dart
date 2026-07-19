@@ -1,3 +1,5 @@
+import '../utils/formatters.dart';
+
 class Transaction {
   final int? id;
   final int? accountId; // Foreign key to Account table
@@ -124,39 +126,29 @@ class Transaction {
   // Check if transaction is income (credit)
   bool get isIncome => transactionType == 'credit';
 
-  // Get formatted amount with currency symbol
+  // Get formatted amount with currency symbol, Indian grouping (2,89,502.00)
   String get formattedAmount {
     final sign = isExpense ? '-' : '+';
-    return '$sign₹${amount.toStringAsFixed(2)}';
+    return '$sign${formatINR(amount)}';
   }
 
   // Get category icon based on category type
   String get categoryIcon {
-    switch (category.toLowerCase()) {
-      case 'food':
-      case 'restaurant':
-        return '🍽️';
-      case 'transport':
-      case 'fuel':
-        return '🚗';
-      case 'shopping':
-      case 'retail':
-        return '🛍️';
-      case 'entertainment':
-        return '🎬';
-      case 'bills':
-      case 'utilities':
-        return '💡';
-      case 'health':
-      case 'medical':
-        return '🏥';
-      case 'education':
-        return '📚';
-      case 'travel':
-        return '✈️';
-      default:
-        return '💰';
+    final c = category.toLowerCase();
+    if (c.contains('food') || c.contains('dining') || c.contains('restaurant')) {
+      return '🍽️';
     }
+    if (c.contains('grocer')) return '🛒';
+    if (c.contains('transport') || c.contains('fuel')) return '🚗';
+    if (c.contains('shopping') || c.contains('retail')) return '🛍️';
+    if (c.contains('entertainment')) return '🎬';
+    if (c.contains('bill') || c.contains('utilit')) return '💡';
+    if (c.contains('health') || c.contains('medical')) return '🏥';
+    if (c.contains('education')) return '📚';
+    if (c.contains('travel')) return '✈️';
+    if (c.contains('invest')) return '📈';
+    if (c.contains('business')) return '💼';
+    return '💰';
   }
 
   @override

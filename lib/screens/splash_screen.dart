@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/auth_service.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -20,8 +21,8 @@ class _SplashScreenState extends State<SplashScreen> {
     final prefs = await SharedPreferences.getInstance();
     final hasSeenOnboarding = prefs.getBool('has_seen_onboarding') ?? false;
 
-    // Check if PIN is set
-    final hasPin = prefs.getString('user_pin') != null;
+    // Check if PIN is set (AuthService owns the storage key)
+    final hasPin = AuthService().isPinSet;
 
     await Future.delayed(const Duration(seconds: 2));
 

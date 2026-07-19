@@ -12,19 +12,24 @@ class AddAccountScreen extends StatefulWidget {
 class _AddAccountScreenState extends State<AddAccountScreen> {
   final AccountDAO _accountDAO = AccountDAO();
   final _formKey = GlobalKey<FormState>();
-  
+
   String _selectedAccountType = 'bank_account';
   String _selectedBank = '';
   final TextEditingController _accountNameController = TextEditingController();
   final TextEditingController _accountNumberController = TextEditingController();
   final TextEditingController _balanceController = TextEditingController();
-  
+  final TextEditingController _debitCard1Controller = TextEditingController();
+  final TextEditingController _debitCard2Controller = TextEditingController();
+
   bool _isLoading = false;
   String _errorMessage = '';
 
+  bool get _isCreditCard => _selectedAccountType == 'credit_card';
+  bool get _isBankAccount => _selectedAccountType == 'bank_account';
+  bool get _isWallet => _selectedAccountType == 'wallet';
+
   final List<Map<String, dynamic>> _accountTypes = [
     {'value': 'bank_account', 'label': 'Bank Account', 'icon': Icons.account_balance},
-    {'value': 'debit_card', 'label': 'Debit Card', 'icon': Icons.credit_card},
     {'value': 'credit_card', 'label': 'Credit Card', 'icon': Icons.credit_card},
     {'value': 'wallet', 'label': 'Digital Wallet', 'icon': Icons.wallet},
   ];
@@ -48,6 +53,10 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
     'Google Pay',
     'PhonePe',
     'Paytm',
+    'Blinkit',
+    'Zepto',
+    'MobiKwik',
+    'Freecharge',
     'Other',
   ];
 
@@ -56,6 +65,8 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
     _accountNameController.dispose();
     _accountNumberController.dispose();
     _balanceController.dispose();
+    _debitCard1Controller.dispose();
+    _debitCard2Controller.dispose();
     super.dispose();
   }
 
@@ -83,16 +94,16 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
               _buildSectionTitle('Account Type'),
               const SizedBox(height: 12),
               _buildAccountTypeSelector(),
-              
+
               const SizedBox(height: 24),
-              
+
               // Bank Selection
               _buildSectionTitle('Bank/Wallet'),
               const SizedBox(height: 12),
               _buildBankSelector(),
-              
+
               const SizedBox(height: 24),
-              
+
               // Account Name
               _buildSectionTitle('Account Name'),
               const SizedBox(height: 12),
@@ -113,46 +124,91 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
                   return null;
                 },
               ),
-              
+
               const SizedBox(height: 24),
-              
+
               // Account Number
-              _buildSectionTitle('Account/Card Number'),
+              _buildSectionTitle(_isWallet
+                  ? 'Account/Card Number (Optional)'
+                  : 'Account/Card Number'),
               const SizedBox(height: 12),
               TextFormField(
                 controller: _accountNumberController,
                 style: const TextStyle(color: Colors.white),
                 decoration: _buildInputDecoration(
-                  'Enter masked account number (e.g., XX1234)',
+                  'e.g. XX1234',
                   Icons.numbers,
+                ).copyWith(
+                  helperText: _isWallet
+                      ? 'Leave empty if wallet SMSes show no number'
+                      : 'Last digits as shown in bank SMS',
+                  helperStyle: TextStyle(color: Colors.grey[500], fontSize: 12),
                 ),
                 validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Please enter account number';
+                  final trimmed = value?.trim() ?? '';
+                  if (trimmed.isEmpty) {
+                    // Wallet SMSes often carry no number at all
+                    return _isWallet ? null : 'Please enter account number';
                   }
-                  if (value.trim().length < 4) {
+                  if (trimmed.length < 4) {
                     return 'Account number must be at least 4 characters';
                   }
                   return null;
                 },
               ),
-              
+
+              // Debit cards live inside the bank account (0-2 cards)
+              if (_isBankAccount) ...[
+                const SizedBox(height: 24),
+                _buildSectionTitle('Debit Cards (Optional, max 2)'),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _debitCard1Controller,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: _buildInputDecoration(
+                    'Debit card 1 — e.g. XX7297',
+                    Icons.credit_card,
+                  ),
+                  validator: _validateDebitCard,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _debitCard2Controller,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: _buildInputDecoration(
+                    'Debit card 2 — e.g. XX4016',
+                    Icons.credit_card,
+                  ).copyWith(
+                    helperText:
+                        'Card SMSes will appear on this account\'s statement',
+                    helperStyle:
+                        TextStyle(color: Colors.grey[500], fontSize: 12),
+                  ),
+                  validator: _validateDebitCard,
+                ),
+              ],
+
               const SizedBox(height: 24),
-              
-              // Current Balance
-              _buildSectionTitle('Current Balance'),
+
+              // Current Balance / Available Credit Limit
+              _buildSectionTitle(
+                  _isCreditCard ? 'Available Credit Limit' : 'Current Balance'),
               const SizedBox(height: 12),
               TextFormField(
                 controller: _balanceController,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 style: const TextStyle(color: Colors.white),
                 decoration: _buildInputDecoration(
-                  'Enter current balance',
+                  _isCreditCard
+                      ? 'Enter available credit limit'
+                      : 'Enter current balance',
                   Icons.currency_rupee,
                 ),
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
-                    return 'Please enter current balance';
+                    return _isCreditCard
+                        ? 'Please enter available credit limit'
+                        : 'Please enter current balance';
                   }
                   if (double.tryParse(value) == null) {
                     return 'Please enter a valid amount';
@@ -160,9 +216,9 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
                   return null;
                 },
               ),
-              
+
               const SizedBox(height: 32),
-              
+
               // Error Message
               if (_errorMessage.isNotEmpty)
                 Container(
@@ -185,9 +241,9 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
                     ],
                   ),
                 ),
-              
+
               const SizedBox(height: 24),
-              
+
               // Save Button
               SizedBox(
                 width: double.infinity,
@@ -224,6 +280,16 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
         ),
       ),
     );
+  }
+
+  String? _validateDebitCard(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty) return null; // cards are optional
+    final digits = trimmed.replaceAll(RegExp(r'\D'), '');
+    if (digits.length < 2) {
+      return 'Enter the card\'s last digits as shown in SMS';
+    }
+    return null;
   }
 
   Widget _buildSectionTitle(String title) {
@@ -281,7 +347,7 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
       itemBuilder: (context, index) {
         final type = _accountTypes[index];
         final isSelected = _selectedAccountType == type['value'];
-        
+
         return GestureDetector(
           onTap: () {
             setState(() {
@@ -290,12 +356,12 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
           },
           child: Container(
             decoration: BoxDecoration(
-              color: isSelected 
+              color: isSelected
                 ? Colors.blue[400]!.withOpacity(0.2)
                 : const Color(0xFF1a1a2e),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: isSelected 
+                color: isSelected
                   ? Colors.blue[400]!
                   : Colors.grey[700]!,
                 width: 2,
@@ -379,11 +445,9 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
 
     try {
       // Check if account number already exists
-      final accountNumberExists = await _accountDAO.accountNumberExists(
-        _accountNumberController.text.trim(),
-      );
-
-      if (accountNumberExists) {
+      final accountNumber = _accountNumberController.text.trim();
+      if (accountNumber.isNotEmpty &&
+          await _accountDAO.accountNumberExists(accountNumber)) {
         setState(() {
           _errorMessage = 'An account with this number already exists';
           _isLoading = false;
@@ -391,20 +455,25 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
         return;
       }
 
+      final card1 = _debitCard1Controller.text.trim();
+      final card2 = _debitCard2Controller.text.trim();
+
       // Create new account
       final now = DateTime.now();
       final account = Account(
         accountType: _selectedAccountType,
         bankName: _selectedBank,
-        accountNumber: _accountNumberController.text.trim(),
+        accountNumber: accountNumber,
         accountName: _accountNameController.text.trim(),
         currentBalance: double.parse(_balanceController.text),
+        debitCard1: _isBankAccount && card1.isNotEmpty ? card1 : null,
+        debitCard2: _isBankAccount && card2.isNotEmpty ? card2 : null,
         createdAt: now,
         updatedAt: now,
       );
 
       // Save to database
-      final accountId = await _accountDAO.insertAccount(account);
+      await _accountDAO.insertAccount(account);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/account.dart';
 import '../database/account_dao.dart';
+import '../utils/formatters.dart';
 import 'add_account_screen.dart';
 import 'account_detail_screen.dart';
 
@@ -16,7 +17,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
   List<Account> _accounts = [];
   bool _isLoading = true;
   String _errorMessage = '';
-  String _selectedFilter = 'all'; // 'all', 'bank_account', 'debit_card', 'credit_card', 'wallet'
+  String _selectedFilter = 'all'; // 'all', 'bank_account', 'credit_card', 'wallet'
 
   @override
   void initState() {
@@ -83,8 +84,6 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                   _buildFilterChip('All', 'all'),
                   const SizedBox(width: 8),
                   _buildFilterChip('Bank Accounts', 'bank_account'),
-                  const SizedBox(width: 8),
-                  _buildFilterChip('Debit Cards', 'debit_card'),
                   const SizedBox(width: 8),
                   _buildFilterChip('Credit Cards', 'credit_card'),
                   const SizedBox(width: 8),
@@ -240,12 +239,22 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
             ),
             const SizedBox(height: 4),
             Text(
-              '****${account.accountNumber}',
+              account.accountNumber.isEmpty
+                  ? 'No number'
+                  : '****${account.accountNumber}',
               style: TextStyle(
                 color: Colors.grey[500],
                 fontSize: 12,
               ),
             ),
+            if (account.debitCards.isNotEmpty)
+              Text(
+                'Debit cards: ${account.debitCards.join(', ')}',
+                style: TextStyle(
+                  color: Colors.grey[500],
+                  fontSize: 12,
+                ),
+              ),
           ],
         ),
         trailing: Column(
@@ -253,7 +262,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             Text(
-              '₹${account.currentBalance.toStringAsFixed(2)}',
+              formatINR(account.currentBalance),
               style: TextStyle(
                 color: account.currentBalance >= 0 ? Colors.green[400] : Colors.red[400],
                 fontWeight: FontWeight.w600,

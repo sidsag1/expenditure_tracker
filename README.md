@@ -107,11 +107,29 @@ A Flutter-based Android application that automatically tracks expenditure from v
 - Search and filter functionality
 
 ## 🚀 Getting Started
-Once implementation begins, this section will include:
-- Installation instructions
-- Setup requirements
-- Usage guidelines
-- Testing procedures
+
+### Prerequisites
+- Flutter SDK (stable channel, Dart >= 3.10.4) with the Android toolchain (`flutter doctor` should show no Android issues)
+- Android SDK + a connected device or emulator
+
+### Build for Android
+
+```bash
+flutter pub get
+flutter run                # debug build on connected device/emulator
+flutter build apk --debug  # debug APK
+flutter build apk --release  # release APK (build/app/outputs/flutter-apk/app-release.apk)
+```
+
+Notes:
+- The release build currently signs with the debug key (fine for installing on your own phone). Set up a proper signing config in `android/app/build.gradle.kts` before any store release.
+- SMS parsing requires a real Android device — grant SMS permission on first launch.
+
+### Run tests
+
+```bash
+flutter test
+```
 
 ## ✅ Project Status: **COMPLETED** (100%)
 

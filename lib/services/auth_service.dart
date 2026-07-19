@@ -8,7 +8,9 @@ class AuthService {
   factory AuthService() => _instance;
   AuthService._internal();
 
-  static const String _pinKey = 'expenditure_tracker_pin';
+  // v2: earlier builds encrypted the PIN with a key regenerated on every app
+  // start, so stored values were unrecoverable. New key name ignores them.
+  static const String _pinKey = 'expenditure_tracker_pin_v2';
   static const String _biometricKey = 'expenditure_tracker_biometric';
   static const String _isFirstLaunchKey = 'expenditure_tracker_first_launch';
 
@@ -19,12 +21,12 @@ class AuthService {
   // Initialize the service
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
-    
-    // Initialize encryption
-    const keyString = 'expenditure_tracker_secure_key_32_chars!';
-    final key = Key.fromSecureRandom(32);
+
+    // Key and IV must be stable across app launches so a stored PIN can be
+    // decrypted and verified in later sessions.
+    final key = Key.fromUtf8('expenditure_tracker_secure_key32');
     _encrypter = Encrypter(AES(key));
-    _iv = IV.fromSecureRandom(16);
+    _iv = IV.fromUtf8('expenditure_iv16');
   }
 
   // Check if it's the first launch
@@ -158,25 +160,14 @@ class AuthService {
     return pin;
   }
 
-  // Validate PIN strength
+  // Validate PIN: 4-8 digits. Simple patterns (1234, 0000, ...) are allowed;
+  // the user chooses their own level of security.
   static bool validatePinStrength(String pin) {
     if (pin.length < 4 || pin.length > 8) {
       return false;
     }
 
-    // Check if PIN contains only digits
-    if (!RegExp(r'^[0-9]+$').hasMatch(pin)) {
-      return false;
-    }
-
-    // Check for simple patterns (optional)
-    // Avoid simple patterns like 1234, 0000, 1111, etc.
-    if (pin == '1234' || pin == '0000' || pin == '1111' || 
-        pin == '123456' || pin == '000000' || pin == '111111') {
-      return false;
-    }
-
-    return true;
+    return RegExp(r'^[0-9]+$').hasMatch(pin);
   }
 
   // Get authentication methods

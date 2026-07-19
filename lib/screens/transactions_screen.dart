@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
+import '../models/account.dart';
 import '../models/transaction.dart';
 import '../database/transaction_dao.dart';
 import '../database/category_dao.dart';
 import '../models/category.dart';
+import 'add_transaction_screen.dart';
 
 class TransactionsScreen extends StatefulWidget {
-  const TransactionsScreen({super.key});
+  // When set, only this account's transactions are shown
+  final Account? account;
+
+  const TransactionsScreen({super.key, this.account});
 
   @override
   State<TransactionsScreen> createState() => _TransactionsScreenState();
@@ -54,22 +59,32 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   Future<void> _loadTransactions() async {
-    List<Transaction> transactions;
+    // Base list: everything, or just the selected account's transactions
+    var transactions = widget.account != null
+        ? await _transactionDAO.getTransactionsByAccount(widget.account!.id!)
+        : await _transactionDAO.getAllTransactions();
 
-    if (_selectedDateRange == 'all' && _selectedCategory == 'all' && _searchQuery.isEmpty) {
-      transactions = await _transactionDAO.getAllTransactions();
-    } else if (_selectedCategory == 'all' && _searchQuery.isEmpty) {
-      transactions = await _getTransactionsByDateRange();
-    } else if (_selectedDateRange == 'all' && _searchQuery.isEmpty) {
-      transactions = await _transactionDAO.getTransactionsByCategory(_selectedCategory);
-    } else if (_searchQuery.isNotEmpty) {
-      transactions = await _transactionDAO.searchTransactions(_searchQuery);
-    } else {
-      // Combined filters
-      transactions = await _getTransactionsByDateRange();
-      if (_selectedCategory != 'all') {
-        transactions = transactions.where((t) => t.category == _selectedCategory).toList();
-      }
+    // Apply the remaining filters in memory so they combine correctly
+    final dateRange = _dateRangeBounds();
+    if (dateRange != null) {
+      transactions = transactions
+          .where((t) =>
+              !t.transactionDate.isBefore(dateRange.$1) &&
+              !t.transactionDate.isAfter(dateRange.$2))
+          .toList();
+    }
+    if (_selectedCategory != 'all') {
+      transactions =
+          transactions.where((t) => t.category == _selectedCategory).toList();
+    }
+    if (_searchQuery.isNotEmpty) {
+      final query = _searchQuery.toLowerCase();
+      transactions = transactions
+          .where((t) =>
+              t.description.toLowerCase().contains(query) ||
+              (t.merchant ?? '').toLowerCase().contains(query) ||
+              t.amount.toString().contains(query))
+          .toList();
     }
 
     setState(() {
@@ -77,33 +92,30 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     });
   }
 
-  Future<List<Transaction>> _getTransactionsByDateRange() async {
+  (DateTime, DateTime)? _dateRangeBounds() {
     final now = DateTime.now();
-    DateTime startDate;
-    DateTime endDate;
 
     switch (_selectedDateRange) {
       case 'today':
-        startDate = DateTime(now.year, now.month, now.day);
-        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59);
-        break;
+        return (
+          DateTime(now.year, now.month, now.day),
+          DateTime(now.year, now.month, now.day, 23, 59, 59),
+        );
       case 'week':
-        startDate = now.subtract(const Duration(days:7));
-        endDate = now;
-        break;
+        return (now.subtract(const Duration(days: 7)), now);
       case 'month':
-        startDate = DateTime(now.year, now.month, 1);
-        endDate = DateTime(now.year, now.month + 1, 0, 23, 59, 59);
-        break;
+        return (
+          DateTime(now.year, now.month, 1),
+          DateTime(now.year, now.month + 1, 0, 23, 59, 59),
+        );
       case 'year':
-        startDate = DateTime(now.year, 1, 1);
-        endDate = DateTime(now.year, 12, 31, 23, 59, 59);
-        break;
+        return (
+          DateTime(now.year, 1, 1),
+          DateTime(now.year, 12, 31, 23, 59, 59),
+        );
       default:
-        return await _transactionDAO.getAllTransactions();
+        return null;
     }
-
-    return await _transactionDAO.getTransactionsByDateRange(startDate, endDate);
   }
 
   @override
@@ -113,9 +125,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text(
-          'Transactions',
-          style: TextStyle(color: Colors.white),
+        title: Text(
+          widget.account != null
+              ? '${widget.account!.accountName} Transactions'
+              : 'Transactions',
+          style: const TextStyle(color: Colors.white),
+          overflow: TextOverflow.ellipsis,
         ),
         actions: [
           IconButton(
@@ -349,6 +364,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       color: const Color(0xFF1a1a2e),
       margin: const EdgeInsets.only(bottom: 12),
       child: ListTile(
+        onTap: () => _editTransaction(transaction),
         contentPadding: const EdgeInsets.all(16),
         leading: CircleAvatar(
           backgroundColor: transaction.isExpense 
@@ -466,28 +482,16 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     }
   }
 
-  void _editTransaction(Transaction transaction) {
-    // TODO: Navigate to transaction editing screen
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1a1a2e),
-        title: const Text(
-          'Edit Transaction',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: const Text(
-          'Transaction editing will be implemented in the next phase.',
-          style: TextStyle(color: Colors.grey),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('OK', style: TextStyle(color: Colors.blue)),
-          ),
-        ],
+  Future<void> _editTransaction(Transaction transaction) async {
+    final updated = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AddTransactionScreen(transaction: transaction),
       ),
     );
+    if (updated == true) {
+      _loadTransactions();
+    }
   }
 
   void _deleteTransaction(Transaction transaction) {
@@ -540,27 +544,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     );
   }
 
-  void _addManualTransaction() {
-    // TODO: Navigate to add transaction screen
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1a1a2e),
-        title: const Text(
-          'Add Transaction',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: const Text(
-          'Manual transaction entry will be implemented in the next phase.',
-          style: TextStyle(color: Colors.grey),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('OK', style: TextStyle(color: Colors.blue)),
-          ),
-        ],
+  Future<void> _addManualTransaction() async {
+    final added = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const AddTransactionScreen(),
       ),
     );
+    if (added == true) {
+      _loadTransactions();
+    }
   }
 }

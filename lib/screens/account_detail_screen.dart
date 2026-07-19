@@ -3,6 +3,9 @@ import '../models/account.dart';
 import '../models/transaction.dart';
 import '../database/account_dao.dart';
 import '../database/transaction_dao.dart';
+import 'add_transaction_screen.dart';
+import 'transactions_screen.dart';
+import '../utils/formatters.dart';
 
 class AccountDetailScreen extends StatefulWidget {
   final Account account;
@@ -192,20 +195,41 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '****${widget.account.accountNumber}',
+                      widget.account.accountNumber.isEmpty
+                          ? '—'
+                          : '****${widget.account.accountNumber}',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 16,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
+                    if (widget.account.debitCards.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Debit Cards',
+                        style: TextStyle(
+                          color: Colors.grey[400],
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        widget.account.debitCards.join(', '),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Text(
-                      'Current Balance',
+                      widget.account.balanceLabel,
                       style: TextStyle(
                         color: Colors.grey[400],
                         fontSize: 12,
@@ -213,7 +237,7 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '₹${widget.account.currentBalance.toStringAsFixed(2)}',
+                      formatINR(widget.account.currentBalance),
                       style: TextStyle(
                         color: widget.account.currentBalance >= 0 
                           ? Colors.green[400] 
@@ -281,7 +305,7 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              '₹${amount.toStringAsFixed(2)}',
+              formatINR(amount),
               style: TextStyle(
                 color: color,
                 fontSize: 18,
@@ -310,8 +334,15 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
               ),
             ),
             TextButton(
-              onPressed: () {
-                // Navigate to full transactions list
+              onPressed: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) =>
+                        TransactionsScreen(account: widget.account),
+                  ),
+                );
+                _loadData();
               },
               child: Text(
                 'View All',
@@ -482,12 +513,15 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
   }
 
   Future<void> _navigateToTransactionDetail(Transaction transaction) async {
-    await Navigator.push(
+    final updated = await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => TransactionDetailScreen(transaction: transaction),
+        builder: (context) => AddTransactionScreen(transaction: transaction),
       ),
     );
+    if (updated == true) {
+      _loadData();
+    }
   }
 
   void _showEditDialog() {
@@ -566,37 +600,5 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
         );
       }
     }
-  }
-}
-
-// Placeholder for TransactionDetailScreen
-class TransactionDetailScreen extends StatelessWidget {
-  final Transaction transaction;
-
-  const TransactionDetailScreen({
-    super.key,
-    required this.transaction,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0f0f23),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text(
-          'Transaction Details',
-          style: TextStyle(color: Colors.white),
-        ),
-        iconTheme: const IconThemeData(color: Colors.white),
-      ),
-      body: const Center(
-        child: Text(
-          'Transaction details screen will be implemented',
-          style: TextStyle(color: Colors.grey),
-        ),
-      ),
-    );
   }
 }

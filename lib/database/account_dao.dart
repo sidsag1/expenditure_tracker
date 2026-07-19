@@ -136,12 +136,26 @@ class AccountDAO {
   }
 
   // Get total balance across all active accounts
+  // Money the user actually owns. Credit card "balances" are available
+  // credit limits, not funds, so they are excluded.
   Future<double> getTotalBalance() async {
     final db = await _dbHelper.database;
     final result = await db.rawQuery(
-      'SELECT SUM(current_balance) as total FROM accounts WHERE is_active = 1',
+      'SELECT SUM(current_balance) as total FROM accounts '
+      "WHERE is_active = 1 AND account_type != 'credit_card'",
     );
-    
+
+    return result.first['total'] as double? ?? 0.0;
+  }
+
+  // Combined available limit across active credit cards
+  Future<double> getTotalAvailableCredit() async {
+    final db = await _dbHelper.database;
+    final result = await db.rawQuery(
+      'SELECT SUM(current_balance) as total FROM accounts '
+      "WHERE is_active = 1 AND account_type = 'credit_card'",
+    );
+
     return result.first['total'] as double? ?? 0.0;
   }
 

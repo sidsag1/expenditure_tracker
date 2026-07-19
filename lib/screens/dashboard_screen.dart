@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import '../models/account.dart';
 import '../models/transaction.dart';
 import '../database/account_dao.dart';
 import '../database/transaction_dao.dart';
+import '../services/sms_service.dart';
 import '../screens/account_management_screen.dart';
 import '../screens/transactions_screen.dart';
 
@@ -20,6 +22,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Account> _accounts = [];
   List<Transaction> _recentTransactions = [];
   double _totalBalance = 0.0;
+  double _totalAvailableCredit = 0.0;
   double _totalIncome = 0.0;
   double _totalExpenses = 0.0;
   bool _isLoading = true;
@@ -38,10 +41,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _errorMessage = '';
       });
 
+      // Pull and parse bank SMS messages before loading dashboard data.
+      // First run processes the entire inbox; later runs only new messages.
+      // Failures here (e.g. permission revoked) shouldn't block the dashboard.
+      try {
+        await SMSService().syncMessages();
+      } catch (_) {
+        // Ignore sync errors; dashboard still shows existing data.
+      }
+
       // Load data in parallel
       final results = await Future.wait([
         _accountDAO.getActiveAccounts(),
         _accountDAO.getTotalBalance(),
+        _accountDAO.getTotalAvailableCredit(),
         _transactionDAO.getRecentTransactions(limit: 5),
         _transactionDAO.getTotalIncome(startDate: DateTime.now().subtract(const Duration(days: 30))),
         _transactionDAO.getTotalExpenses(startDate: DateTime.now().subtract(const Duration(days: 30))),
@@ -50,9 +63,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _accounts = results[0] as List<Account>;
         _totalBalance = results[1] as double;
-        _recentTransactions = results[2] as List<Transaction>;
-        _totalIncome = results[3] as double;
-        _totalExpenses = results[4] as double;
+        _totalAvailableCredit = results[2] as double;
+        _recentTransactions = results[3] as List<Transaction>;
+        _totalIncome = results[4] as double;
+        _totalExpenses = results[5] as double;
         _isLoading = false;
       });
     } catch (e) {
@@ -126,15 +140,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Summary Cards Row
-            Row(
-              children: [
-                Expanded(child: _buildBalanceCard()),
-                const SizedBox(width: 12),
-                Expanded(child: _buildIncomeExpenseCard()),
-              ],
-            ),
-            
+            // Summary cards stacked full-width so large amounts stay readable
+            _buildBalanceCard(),
+            const SizedBox(height: 12),
+            _buildIncomeExpenseCard(),
+
             const SizedBox(height: 24),
             
             // Accounts Overview
@@ -176,22 +186,47 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ],
             ),
             const SizedBox(height: 12),
-            Text(
-              '₹${_totalBalance.toStringAsFixed(2)}',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                _formatCurrency(_totalBalance),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
             const SizedBox(height: 8),
             Text(
-              'Across all accounts',
+              'Across bank accounts & wallets',
               style: TextStyle(
                 color: Colors.grey[400],
                 fontSize: 12,
               ),
             ),
+            if (_totalAvailableCredit > 0) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Icon(Icons.credit_card, color: Colors.orange[400], size: 16),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        'Available Credit: ${_formatCurrency(_totalAvailableCredit)}',
+                        style: TextStyle(
+                          color: Colors.orange[400],
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -199,6 +234,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildIncomeExpenseCard() {
+    final net = _totalIncome - _totalExpenses;
+
     return Card(
       color: const Color(0xFF1a1a2e),
       child: Padding(
@@ -206,54 +243,67 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: _buildIncomeExpenseItem(
-                    'Income',
-                    _totalIncome,
-                    Colors.green[400]!,
-                    Icons.trending_up,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _buildIncomeExpenseItem(
-                    'Expenses',
-                    _totalExpenses,
-                    Colors.red[400]!,
-                    Icons.trending_down,
-                  ),
-                ),
-              ],
+            Text(
+              'Last 30 Days',
+              style: TextStyle(
+                color: Colors.grey[300],
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(height: 16),
-            // Net amount
+            IntrinsicHeight(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _buildIncomeExpenseItem(
+                      'Income',
+                      _totalIncome,
+                      Colors.green[400]!,
+                      Icons.arrow_downward,
+                    ),
+                  ),
+                  VerticalDivider(color: Colors.grey[700], width: 32),
+                  Expanded(
+                    child: _buildIncomeExpenseItem(
+                      'Expenses',
+                      _totalExpenses,
+                      Colors.red[400]!,
+                      Icons.arrow_upward,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
             Container(
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
               decoration: BoxDecoration(
-                color: Colors.grey[800],
+                color: Colors.grey[850],
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    'Net (Last 30 Days)',
+                    net >= 0 ? 'Net Savings' : 'Net Spend',
                     style: TextStyle(
                       color: Colors.grey[300],
-                      fontSize: 12,
+                      fontSize: 13,
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '₹${(_totalIncome - _totalExpenses).toStringAsFixed(2)}',
-                    style: TextStyle(
-                      color: (_totalIncome - _totalExpenses) >= 0 
-                          ? Colors.green[400] 
-                          : Colors.red[400],
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
+                  Flexible(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        _formatCurrency(net.abs()),
+                        style: TextStyle(
+                          color: net >= 0 ? Colors.green[400] : Colors.red[400],
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -271,28 +321,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
       children: [
         Row(
           children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(width: 8),
+            Icon(icon, color: color, size: 16),
+            const SizedBox(width: 6),
             Text(
               title,
               style: TextStyle(
-                color: Colors.grey[300],
-                fontSize: 14,
+                color: Colors.grey[400],
+                fontSize: 13,
               ),
             ),
           ],
         ),
-        const SizedBox(height: 4),
-        Text(
-          '₹${amount.toStringAsFixed(2)}',
-          style: TextStyle(
-            color: color,
-            fontSize: 24,
-            fontWeight: FontWeight.w700,
+        const SizedBox(height: 6),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            _formatCurrency(amount),
+            style: TextStyle(
+              color: color,
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ),
       ],
     );
+  }
+
+  // Indian-style grouping, no paise for large amounts: ₹10,92,132
+  String _formatCurrency(double amount) {
+    final format = NumberFormat.currency(
+      locale: 'en_IN',
+      symbol: '₹',
+      decimalDigits: amount.abs() >= 1000 ? 0 : 2,
+    );
+    return format.format(amount);
   }
 
   Widget _buildAccountsOverview() {
@@ -419,10 +482,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Balance: ₹${account.currentBalance.toStringAsFixed(2)}',
+                  '${account.accountType == 'credit_card' ? 'Available Limit' : 'Balance'}: ${_formatCurrency(account.currentBalance)}',
                   style: TextStyle(
-                    color: account.currentBalance >= 0 
-                        ? Colors.green[400] 
+                    color: account.currentBalance >= 0
+                        ? Colors.green[400]
                         : Colors.red[400],
                     fontWeight: FontWeight.w600,
                     fontSize: 14,
