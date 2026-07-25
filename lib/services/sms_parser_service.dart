@@ -7,6 +7,8 @@ import '../models/account.dart';
 import '../database/transaction_dao.dart';
 import '../database/account_dao.dart';
 import '../utils/app_logger.dart';
+import '../utils/constants.dart';
+import 'package:sqflite/sqflite.dart' hide Transaction;
 
 class SMSParserService {
   static final SMSParserService _instance = SMSParserService._internal();
@@ -47,9 +49,11 @@ class SMSParserService {
         case 'SBI':
           transaction = _parseSBIMessage(message, receivedAt);
           break;
-        default:
-          // Try generic parsing
-          transaction = _parseGenericMessage(message, bankName, receivedAt);
+      }
+
+      if (transaction == null) {
+        // Try generic parsing
+        transaction = _parseGenericMessage(message, bankName, receivedAt);
       }
 
       if (transaction != null) {
@@ -103,7 +107,7 @@ class SMSParserService {
 
     // ICICI Credit Card Transaction
     RegExp creditCardRegex = RegExp(
-      r'(?:INR|Rs\.)\s*([\d,]+\.?\d*)\s+spent\s+(?:using\s+)?ICICI Bank Card ([A-Z]{2}\d+).*?on\s+(\d{1,2}-[A-Za-z]{3}-\d{2})\s+on\s+(.+?)(?:\.|$)',
+      r'(?:INR|Rs\.?)\s*([\d,]+\.?\d*)\s+spent\s+(?:using\s+)?ICICI Bank Card ([A-Z]{2}\d+).*?on\s+(\d{1,2}-[A-Za-z]{3}-\d{2})\s+on\s+(.+?)(?:\.|$)',
       caseSensitive: false,
     );
 
@@ -162,7 +166,7 @@ class SMSParserService {
     if (match != null) {
       final amount = _parseAmount(match.group(1)!);
       final date = _parseDate(match.group(3)!) ?? receivedAt ?? DateTime.now();
-      final merchant = match.group(4)!.trim();
+      final merchant = _normalizeMerchantText(match.group(4));
 
       return Transaction(
         transactionType: 'debit',
@@ -204,7 +208,7 @@ class SMSParserService {
   Transaction? _parseKotakMessage(String message, DateTime? receivedAt) {
     // Kotak Debit Card Transaction
     RegExp debitCardRegex = RegExp(
-      r'Rs\.?([\d,]+\.?\d*)\s+spent\s+via Kotak Debit Card ([A-Z]{2}\d+).*?at\s+(.+?)(?:\.|\s+on)',
+      r'Rs\.?\s*([\d,]+\.?\d*)\s+spent\s+via Kotak Debit Card ([A-Z]{2}\d+).*?at\s+(.+?)(?:\.|\s+on)',
       caseSensitive: false,
     );
 
@@ -226,7 +230,7 @@ class SMSParserService {
     match = debitCardRegex.firstMatch(message);
     if (match != null) {
       final amount = _parseAmount(match.group(1)!);
-      final merchant = match.group(3)!.trim();
+      final merchant = _normalizeMerchantText(match.group(3));
       final date = _extractDate(message) ?? receivedAt ?? DateTime.now();
 
       return Transaction(
@@ -248,7 +252,7 @@ class SMSParserService {
     if (match != null) {
       final amount = _parseAmount(match.group(1)!);
       final isSent = message.toLowerCase().contains('sent');
-      final recipient = match.group(3)!.trim();
+      final recipient = _normalizeMerchantText(match.group(3));
       final date = _extractDate(message) ?? receivedAt ?? DateTime.now();
 
       return Transaction(
@@ -298,7 +302,10 @@ class SMSParserService {
 
     // SBI UPI Transaction
     RegExp upiRegex = RegExp(
-      r'A\/C\s+([A-Z]\d+)\s+debited\s+by\s+([\d,]+\.?\d*).*?date\s+(\d{1,2}[A-Za-z]{2}\d{2}).*?trf\s+to\s+(.+?)\s+Refno',
+      // The date token is a 3-letter month abbreviation ("09Dec25"), matching
+      // what _parseSBIUpiDate itself expects -- a stray {2} here used to make
+      // this whole regex (and therefore the message) fail to match at all.
+      r'A\/C\s+([A-Z]\d+)\s+debited\s+by\s+(?:Rs\.?|INR)?\s*([\d,]+\.?\d*).*?date\s+(\d{1,2}[A-Za-z]{3}\d{2}).*?trf\s+to\s+(.+?)\s+Refno',
       caseSensitive: false,
     );
 
@@ -333,7 +340,7 @@ class SMSParserService {
     match = upiRegex.firstMatch(message);
     if (match != null) {
       final amount = _parseAmount(match.group(2)!);
-      final merchant = match.group(4)!.trim();
+      final merchant = _normalizeMerchantText(match.group(4));
       final date = _parseSBIUpiDate(match.group(3)!) ?? receivedAt ?? DateTime.now();
 
       return Transaction(
@@ -379,29 +386,38 @@ class SMSParserService {
     // moving; an amount alone (e.g. in a loan or cashback ad) is not enough.
     if (!_containsTransactionVerb(message)) return null;
 
+    // Strip out balance phrases before scanning for amount
+    String messageWithoutBalance = message;
+    final balancePatterns = [
+      RegExp(r'Avl\.?\s*[Bb]al(?:ance)?[:.]?\s*(?:Rs\.?|INR)\s*[\d,]+\.?\d*', caseSensitive: false),
+      RegExp(r'Available\s+Balance\s+is\s+(?:Rs\.?|INR)\s*[\d,]+\.?\d*', caseSensitive: false),
+      RegExp(r'Avl\.?\s*Limit\s*:?\s*(?:Rs\.?|INR)\s*[\d,]+\.?\d*', caseSensitive: false),
+      RegExp(r'Available\s+Limit\s+is\s+(?:Rs\.?|INR)\s*[\d,]+\.?\d*', caseSensitive: false),
+    ];
+    for (final pattern in balancePatterns) {
+      messageWithoutBalance = messageWithoutBalance.replaceAll(pattern, '');
+    }
+
     // Try to extract amount
     RegExp amountRegex = RegExp(
-      r'(?:Rs\.?|INR)\s*([\d,]+\.?\d*)',
+      r'(?:Rs\.?|INR|Rupees)\s*([\d,]+\.?\d*)',
       caseSensitive: false,
     );
 
-    final amountMatch = amountRegex.firstMatch(message);
+    final amountMatch = amountRegex.firstMatch(messageWithoutBalance);
     if (amountMatch == null) return null;
 
     final amount = _parseAmount(amountMatch.group(1)!);
     // Wallet SMSes often carry no date; fall back to when the SMS arrived
     final date = _extractDate(message) ?? receivedAt ?? DateTime.now();
 
-    // Determine transaction type
-    final isCredit = message.toLowerCase().contains('credited') ||
-                    message.toLowerCase().contains('received') ||
-                    message.toLowerCase().contains('payment received') ||
-                    message.toLowerCase().contains('added to');
+    final sign = _determineGenericSign(message);
+    if (sign == null) return null; // a declined/failed txn moved no money
 
     return Transaction(
-      transactionType: isCredit ? 'credit' : 'debit',
+      transactionType: sign,
       amount: amount,
-      description: isCredit ? 'Credit transaction' : 'Debit transaction',
+      description: sign == 'credit' ? 'Credit transaction' : 'Debit transaction',
       merchant: _extractMerchant(message),
       transactionDate: date,
       referenceNumber: _extractReferenceNumber(message),
@@ -412,13 +428,57 @@ class SMSParserService {
     );
   }
 
+  // Whether a generic-bank message is a credit or a debit, or null if it
+  // describes money that never actually moved (a declined/failed attempt).
+  // Checked as an ordered set of explicit cases rather than a flat
+  // bag-of-words OR-chain: the old `contains('credited')` check mis-signed
+  // "not credited" and "refund received" as ordinary credits, and had no way
+  // to represent "this never happened" for a declined transaction at all.
+  String? _determineGenericSign(String message) {
+    final lower = message.toLowerCase();
+
+    if (RegExp(r'\b(?:declined|failed)\b').hasMatch(lower) &&
+        !lower.contains('refund')) {
+      return null;
+    }
+    if (lower.contains('not credited') || lower.contains('not debited')) {
+      return null;
+    }
+    // "Payment request received" / "collect request" is a UPI collect
+    // *request* landing on the device -- an ask for money, not money that has
+    // actually moved. The bare 'received' check below would otherwise mark
+    // it a credit even though nothing has been paid yet.
+    if (lower.contains('payment request') ||
+        lower.contains('collect request') ||
+        lower.contains('requested money')) {
+      return null;
+    }
+    if (lower.contains('refund') || RegExp(r'\breversed\b').hasMatch(lower)) {
+      return 'credit';
+    }
+    if (lower.contains('credited') ||
+        lower.contains('received') ||
+        lower.contains('added to')) {
+      return 'credit';
+    }
+    return 'debit';
+  }
+
+  // Fetches the active-accounts list once so a caller processing many
+  // messages in one sync batch can pass it into repeated saveTransaction
+  // calls instead of re-querying per message (see saveTransaction).
+  Future<List<Account>> loadActiveAccounts({DatabaseExecutor? txn}) {
+    return _accountDAO.getActiveAccounts(txn: txn);
+  }
+
   // Check if transaction already exists (duplicate detection)
-  Future<bool> isDuplicateTransaction(Transaction transaction) async {
+  Future<bool> isDuplicateTransaction(Transaction transaction,
+      {DatabaseExecutor? txn}) async {
     if (transaction.transactionId == null) return false;
-    
+
     final existingTransaction = await _transactionDAO
-        .getTransactionByTransactionId(transaction.transactionId!);
-    
+        .getTransactionByTransactionId(transaction.transactionId!, txn: txn);
+
     return existingTransaction != null;
   }
 
@@ -426,30 +486,43 @@ class SMSParserService {
   // account the user has registered are saved; [sourceMessage] is the raw
   // SMS body, used to match the account/card number in the message against
   // the registered accounts.
+  //
+  // [activeAccounts], when passed, is used instead of re-querying the DB for
+  // the active-accounts list -- a caller processing many messages in one
+  // sync batch (see SMSService.syncMessages) fetches it once per batch and
+  // reuses it here, rather than hitting SQLite on every single message.
   Future<bool> saveTransaction(Transaction transaction,
-      {String? sourceMessage}) async {
+      {String? sourceMessage,
+      DatabaseExecutor? txn,
+      List<Account>? activeAccounts}) async {
     try {
       // Check for duplicates
-      if (await isDuplicateTransaction(transaction)) {
+      if (await isDuplicateTransaction(transaction, txn: txn)) {
         return false;
       }
 
-      // Only keep transactions for accounts the user has added. A match on a
-      // linked debit card lands on the bank account itself, so the
-      // transaction goes straight onto that account's statement.
-      final account =
-          await _findRegisteredAccount(transaction, sourceMessage ?? '');
-      if (account == null) {
-        return false;
-      }
+      // Only keep transactions for a bank the user actually tracks. A match
+      // on a linked debit card lands on the bank account itself, so the
+      // transaction goes straight onto that account's statement; an
+      // ambiguous or unmatched account within a tracked bank is still
+      // imported (see _matchAccount) rather than dropped, just unassigned
+      // and flagged for the user to resolve.
+      final match = await _matchAccount(transaction, sourceMessage ?? '',
+          txn: txn, activeAccounts: activeAccounts);
 
-      var linked = transaction.copyWith(accountId: account.id);
+      var linked = transaction.copyWith(
+        accountId: match.account?.id,
+        needsReview: transaction.needsReview || match.needsReview || match.account == null,
+      );
 
       // Banks often send two SMSes for the same event; keep only a confirmed
       // duplicate off the books entirely. An ambiguous same-day/same-amount
       // candidate is still imported (dropping it risks losing real money)
-      // but flagged so the user can resolve it later.
-      final duplicateMatch = await _transactionDAO.findDuplicateMatch(linked);
+      // but flagged so the user can resolve it later. (No-op when the
+      // account itself is unassigned -- there's nothing yet to compare
+      // against.)
+      final duplicateMatch =
+          await _transactionDAO.findDuplicateMatch(linked, txn: txn);
       if (duplicateMatch == DuplicateMatch.confirmed) {
         return false;
       }
@@ -457,7 +530,8 @@ class SMSParserService {
         linked = linked.copyWith(needsReview: true);
       }
 
-      final insertedId = await _transactionDAO.insertOrIgnoreTransaction(linked);
+      final insertedId =
+          await _transactionDAO.insertOrIgnoreTransaction(linked, txn: txn);
       if (insertedId == 0) {
         // Lost a race against another sync inserting the same transaction_id.
         return false;
@@ -465,11 +539,12 @@ class SMSParserService {
 
       // Update the account's balance from the message, if it carried one and
       // isn't older than what's already on record.
-      if (linked.balanceAfter != null) {
+      if (linked.accountId != null && linked.balanceAfter != null) {
         await _accountDAO.updateBalanceIfNewer(
-          account.id!,
+          linked.accountId!,
           linked.balanceAfter!,
           linked.transactionDate,
+          txn: txn,
         );
       }
 
@@ -480,10 +555,11 @@ class SMSParserService {
       // this leg is already pattern-flagged: whichever leg saves *first* has
       // no counterpart to find yet, so this is what retroactively marks it
       // once the second leg (pattern-flagged or not) arrives.
-      final offset = await _transactionDAO
-          .findOffsettingTransaction(linked.copyWith(id: insertedId));
+      final offset = await _transactionDAO.findOffsettingTransaction(
+          linked.copyWith(id: insertedId),
+          txn: txn);
       if (offset != null && offset.id != null) {
-        await _transactionDAO.markTransferPair(insertedId, offset.id!);
+        await _transactionDAO.markTransferPair(insertedId, offset.id!, txn: txn);
       }
 
       return true;
@@ -510,37 +586,77 @@ class SMSParserService {
     return processedTransactions;
   }
 
-  // Find the registered (active) account this message belongs to, or null if
-  // the user has not added a matching account.
-  Future<Account?> _findRegisteredAccount(
-      Transaction transaction, String message) async {
-    final accounts = await _accountDAO.getActiveAccounts();
+  // Find the registered (active) account this message belongs to.
+  //
+  // `account` is only ever non-null for a *confident* match; `needsReview`
+  // means the message's bank is tracked but which specific account it
+  // belongs to is unclear (multiple accounts at that bank and nothing in the
+  // message to disambiguate, or a digit run that's too short/ambiguous to
+  // trust) or was never resolved at all (digits present but none of them
+  // match a registered account/card). Both cases are imported and flagged
+  // rather than silently guessed at or dropped -- see saveTransaction.
+  // `(null, false)` means the bank itself isn't tracked (no account of that
+  // bank registered at all), which is a deliberate drop, not a matching
+  // failure.
+  Future<({Account? account, bool needsReview})> _matchAccount(
+      Transaction transaction, String message,
+      {DatabaseExecutor? txn, List<Account>? activeAccounts}) async {
+    final accounts =
+        activeAccounts ?? await _accountDAO.getActiveAccounts(txn: txn);
     final bankAccounts = accounts
         .where((a) => _bankNamesMatch(a.bankName, transaction.bankName))
         .toList();
-    if (bankAccounts.isEmpty) return null;
+    if (bankAccounts.isEmpty) {
+      return (account: null, needsReview: false);
+    }
 
     final messageDigits = _extractAccountDigits(message);
     if (messageDigits.isEmpty) {
-      // Message names no account/card number; the bank itself is registered,
-      // so attach the transaction to that bank's account.
-      return bankAccounts.first;
+      if (bankAccounts.length == 1) {
+        return (account: bankAccounts.first, needsReview: false);
+      }
+      // Multiple accounts at this bank and nothing in the message names
+      // which one -- guessing (the old behaviour) silently misattributes
+      // real money to the wrong account's statement.
+      return (account: null, needsReview: true);
     }
 
+    // Require at least 3 matching digits and prefer the longest match: a
+    // 2-digit suffix (e.g. "18" lifted from a helpline number elsewhere in
+    // the message) is common enough by chance to bind to the wrong account.
+    Account? bestAccount;
+    int bestLen = 0;
+    var tie = false;
     for (final account in bankAccounts) {
-      // A message naming a linked debit card belongs to the bank account
       final numbers = [account.accountNumber, ...account.debitCards];
+      var accountBestLen = 0;
       for (final number in numbers) {
         final stored = number.replaceAll(RegExp(r'\D'), '');
         if (stored.isEmpty) continue;
         for (final digits in messageDigits) {
-          // Banks mask numbers to different lengths (XX340 vs XX4340), so one
-          // side being the suffix of the other counts as a match.
+          if (digits.length < 3) continue;
+          // Banks mask numbers to different lengths (XX340 vs XX4340), so
+          // one side being the suffix of the other counts as a match.
           if (stored.endsWith(digits) || digits.endsWith(stored)) {
-            return account;
+            final matchedLen =
+                stored.length < digits.length ? stored.length : digits.length;
+            if (matchedLen > accountBestLen) accountBestLen = matchedLen;
           }
         }
       }
+      if (accountBestLen > bestLen) {
+        bestLen = accountBestLen;
+        bestAccount = account;
+        tie = false;
+      } else if (accountBestLen > 0 && accountBestLen == bestLen) {
+        tie = true;
+      }
+    }
+
+    if (bestAccount != null) {
+      return tie
+          ? (account: null, needsReview: true)
+          : (account: bestAccount, needsReview: false);
     }
 
     // Wallets (Blinkit, Paytm, ...) are often registered without a number
@@ -548,11 +664,14 @@ class SMSParserService {
     for (final account in bankAccounts) {
       if (account.accountType == 'wallet' &&
           account.accountNumber.replaceAll(RegExp(r'\D'), '').isEmpty) {
-        return account;
+        return (account: account, needsReview: false);
       }
     }
 
-    return null;
+    // The message named account/card digits but none matched a registered
+    // account -- don't silently discard the money, flag it for the user to
+    // assign manually.
+    return (account: null, needsReview: true);
   }
 
   bool _bankNamesMatch(String a, String b) {
@@ -578,14 +697,37 @@ class SMSParserService {
 
   // True for offers, ads, EMI due reminders, OTPs and other messages that
   // mention money without an actual transaction having happened.
+  //
+  // Two-stage: a message with a strong transaction signature (amount + verb
+  // + account/card token + a real date) is a genuine alert even though real
+  // bank templates routinely also carry "Do not share your OTP/CVV" or a
+  // "Know more" link -- so the broad marker list below must not veto it. Only
+  // a narrow, unambiguous denylist (an actual OTP delivery, or loan-ad
+  // phrasing that never means real money moved) can override a strong
+  // signature.
   bool _isNonTransactionalMessage(String message) {
     final lower = message.toLowerCase();
-    const markers = [
-      'best deal',
-      'deal alert',
+
+    const hardVeto = [
+      'otp is',
+      'otp for',
+      'is your otp',
+      'one time password',
       'unlock loan',
       'pre-approved',
       'pre approved',
+      'instant cash',
+      'cash alert',
+      'ready to be credited',
+      'ready to be disbursed',
+    ];
+    if (hardVeto.any(lower.contains)) return true;
+
+    if (_hasStrongTransactionSignature(message)) return false;
+
+    const markers = [
+      'best deal',
+      'deal alert',
       'apply now',
       'know more',
       'click here',
@@ -596,17 +738,8 @@ class SMSParserService {
       'congratulations',
       'is due on',
       'due on',
-      'otp is',
-      'otp for',
-      'is your otp',
-      'one time password',
       'do not share',
-      // Loan/cash ads phrased in the future tense ("ready to be credited")
-      'instant cash',
-      'cash alert',
-      'ready to be credited',
       'will be credited',
-      'ready to be disbursed',
       'avail now',
       // Credit card bill "convert to EMI" nudges quote the bill amount
       // without any money having moved
@@ -617,6 +750,22 @@ class SMSParserService {
       'check eligibility',
     ];
     return markers.any(lower.contains);
+  }
+
+  // Amount + a transaction verb + an account/card token + a resolvable date,
+  // all present -- the shape every genuine bank transaction alert has, and
+  // ad/reminder copy essentially never does by accident (see hardVeto above
+  // for the cases that do).
+  bool _hasStrongTransactionSignature(String message) {
+    final hasAmount =
+        RegExp(r'(?:Rs\.?|INR|Rupees)\s*[\d,]+\.?\d*', caseSensitive: false)
+            .hasMatch(message);
+    final hasAccountToken =
+        RegExp(r'\b(?:a\/c|acct|account|card|ac)\b', caseSensitive: false)
+            .hasMatch(message);
+    return hasAmount &&
+        hasAccountToken &&
+        _containsTransactionVerb(message);
   }
 
   // True when the message describes money actually moving.
@@ -731,42 +880,12 @@ class SMSParserService {
   String? _getBankNameFromSender(String sender) {
     final upperSender = sender.toUpperCase();
 
-    // Banks with dedicated parsers
-    if (upperSender.contains('ICICI')) return 'ICICI';
-    if (upperSender.contains('KOTAK')) return 'Kotak';
-    if (upperSender.contains('SBI')) return 'SBI';
-
-    // Banks/wallets handled by the generic parser
-    const genericSenders = {
-      'HDFC': 'HDFC',
-      'AXIS': 'Axis Bank',
-      'BOB': 'Bank of Baroda',
-      'PNB': 'Punjab National Bank',
-      'CNRB': 'Canara Bank',
-      'CANBK': 'Canara Bank',
-      'IDBI': 'IDBI Bank',
-      'YESB': 'Yes Bank',
-      'INDB': 'IndusInd Bank',
-      'FEDB': 'Federal Bank',
-      'RBLB': 'RBL Bank',
-      'SOUTHB': 'South Indian Bank',
-      'AMZPAY': 'Amazon Pay',
-      'AMAZON': 'Amazon Pay',
-      'GPAY': 'Google Pay',
-      'GOOGPAY': 'Google Pay',
-      'PHONEPE': 'PhonePe',
-      'PPLTFIP': 'PhonePe',
-      'PYTM': 'Paytm',
-      'BLNKIT': 'Blinkit',
-      'BLINKIT': 'Blinkit',
-      'ZEPTO': 'Zepto',
-      'MOBIKWIK': 'MobiKwik',
-      'MBKWIK': 'MobiKwik',
-      'FREECHARGE': 'Freecharge',
-      'FRECHG': 'Freecharge',
-    };
-    for (final entry in genericSenders.entries) {
-      if (upperSender.contains(entry.key)) return entry.value;
+    for (final entry in AppConstants.bankSenderNumbers.entries) {
+      for (final number in entry.value) {
+        if (upperSender.contains(number.toUpperCase())) {
+          return entry.key;
+        }
+      }
     }
 
     return null;
@@ -775,10 +894,10 @@ class SMSParserService {
   String _determineAccountType(String message, String bankName) {
     final lowerMessage = message.toLowerCase();
     
-    if (lowerMessage.contains('credit card') || lowerMessage.contains('card xx')) {
-      return 'credit_card';
-    } else if (lowerMessage.contains('debit card')) {
+    if (lowerMessage.contains('debit card')) {
       return 'debit_card';
+    } else if (lowerMessage.contains('credit card') || lowerMessage.contains('card xx')) {
+      return 'credit_card';
     } else if (lowerMessage.contains('upi')) {
       return 'bank_account';
     }
@@ -847,14 +966,20 @@ class SMSParserService {
   // over the first digit-triplet found anywhere in the message, so a
   // reference or phone number elsewhere in the text isn't mistaken for one.
   DateTime? _extractDate(String message) {
-    final markerMatch = RegExp(
+    final markerMatches = RegExp(
       r'\b(?:on|dt|dated|date)\b[:\s]+(\S+)',
       caseSensitive: false,
-    ).firstMatch(message);
-    if (markerMatch != null) {
+    ).allMatches(message);
+
+    DateTime? bestDate;
+    for (final markerMatch in markerMatches) {
       final fromMarker = _extractDateFromText(markerMatch.group(1)!);
-      if (fromMarker != null) return fromMarker;
+      if (fromMarker != null) {
+        bestDate = fromMarker;
+      }
     }
+    if (bestDate != null) return bestDate;
+
     return _extractDateFromText(message);
   }
 
@@ -879,6 +1004,7 @@ class SMSParserService {
       RegExp(r'(?<!\d)(\d{1,2})/(\d{1,2})/(\d{2,4})(?!\d)'),     // 30/09/25
       RegExp(r'(?<!\d)(\d{1,2})-(\d{1,2})-(\d{2,4})(?!\d)'),     // 15-07-26
       RegExp(r'(?<!\d)(\d{1,2})\.(\d{1,2})\.(\d{2,4})(?!\d)'),   // 01.12.25
+      RegExp(r'(?<!\d)(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})(?!\d)'), // 30 Sep 25 / 30 September 2025
     ];
 
     for (final pattern in patterns) {
@@ -930,26 +1056,45 @@ class SMSParserService {
       'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
       'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
     };
-    final named = months[monthStr.toLowerCase()];
+    final lower = monthStr.toLowerCase();
+    // Full month names ("September") reduce to the same 3-letter key as the
+    // abbreviation ("sep") the map is keyed on.
+    final named = months[lower] ?? (lower.length > 3 ? months[lower.substring(0, 3)] : null);
     if (named != null) return named;
     final numeric = int.tryParse(monthStr);
     if (numeric != null && numeric >= 1 && numeric <= 12) return numeric;
     return null;
   }
 
+  // Stops the merchant capture at the footer boilerplate every bank SMS
+  // template appends right after the payee name, plus a *word-boundary*
+  // 'on'/'dated' -- the old unanchored `(?:\.|on|$)` terminator matched the
+  // literal letters "on" anywhere, including mid-word ("MONITOR" -> "M",
+  // "ONLINE" -> "").
+  static const String _merchantStopPattern =
+      r'(?=\s*(?:\b(?:on|dated)\b|[.;]|Ref|UPI|Avl|Not you|Not U|Call|Block|SMS|A\/c|Acct|Account)|$)';
+
   String? _extractMerchant(String message) {
     // Try to extract merchant name from common patterns
     final patterns = [
-      RegExp(r'at\s+(.+?)(?:\.|on|$)', caseSensitive: false),
-      RegExp(r'to\s+(.+?)(?:\.|on|$)', caseSensitive: false),
-      RegExp(r'from\s+(.+?)(?:\.|on|$)', caseSensitive: false),
+      RegExp(r'\bat\s+(.+?)' + _merchantStopPattern, caseSensitive: false),
+      RegExp(r'\bto\s+(.+?)' + _merchantStopPattern, caseSensitive: false),
+      RegExp(r'\bfrom\s+(.+?)' + _merchantStopPattern, caseSensitive: false),
     ];
 
     for (final pattern in patterns) {
       final match = pattern.firstMatch(message);
       if (match != null) {
-        final merchant = match.group(1)?.trim();
-        if (merchant != null && merchant.isNotEmpty && merchant.length < 100) {
+        final merchant = _normalizeMerchantText(match.group(1));
+        // A genuine merchant name has a letter in it; a bare digit run means
+        // the "to"/"at"/"from" anchor latched onto something else entirely,
+        // e.g. the dispute-line phone number in "...SMS BLOCK 340 to
+        // 9215676766." A merchant candidate that's all digits is discarded
+        // rather than returned.
+        if (merchant != null &&
+            merchant.isNotEmpty &&
+            merchant.length < 100 &&
+            RegExp(r'[A-Za-z]').hasMatch(merchant)) {
           return merchant;
         }
       }
@@ -957,9 +1102,23 @@ class SMSParserService {
     return null;
   }
 
+  // Strips the UPI merchant-code prefixes and trailing masked card digits
+  // banks glue onto the raw payee string, and collapses whitespace, so
+  // "PYU*SAFRESH TECHNOLOGY  PR" and "MERCHANT 6955" read as a name rather
+  // than a wire-format token.
+  String? _normalizeMerchantText(String? raw) {
+    if (raw == null) return null;
+    var text = raw.trim();
+    text =
+        text.replaceFirst(RegExp(r'^(?:PYU\*|UPI\/)', caseSensitive: false), '');
+    text = text.replaceFirst(RegExp(r'\s+[xX]{0,2}\d{3,6}$'), '');
+    text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return text.isEmpty ? null : text;
+  }
+
   String? _extractReferenceNumber(String message) {
     final patterns = [
-      RegExp(r'Ref(?:\s+No\.?)?[:#]?\s*(\w*\d\w*)', caseSensitive: false),
+      RegExp(r'Ref(?:[.\s]*No\.?)?[:#]?\s*([\w-]*\d[\w-]*)', caseSensitive: false),
       RegExp(r'Refno\s*(\d+)', caseSensitive: false),
       RegExp(r'UTR\s*(\d+)', caseSensitive: false),
       RegExp(r'UPI[:\s]+(\d+)', caseSensitive: false),
@@ -982,7 +1141,7 @@ class SMSParserService {
   // bank-specific branch produced it.
   double? _extractBalance(String message) {
     final patterns = [
-      RegExp(r'Avl\.?\s*[Bb]al(?:ance)?\.?\s*(?:Rs\.?|INR)\s*([\d,]+\.?\d*)',
+      RegExp(r'Avl\.?\s*[Bb]al(?:ance)?[:.]?\s*(?:Rs\.?|INR)\s*([\d,]+\.?\d*)',
           caseSensitive: false),
       RegExp(r'Available\s+Balance\s+is\s+(?:Rs\.?|INR)\s*([\d,]+\.?\d*)',
           caseSensitive: false),

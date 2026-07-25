@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:sqflite/sqflite.dart';
 import 'database_helper.dart';
 import '../models/transaction.dart' as models;
+import '../utils/app_logger.dart';
 
 // Result of comparing a not-yet-saved transaction against rows already on
 // the same account for the same type/amount/day.
@@ -34,8 +35,9 @@ class TransactionDAO {
   }
 
   // Insert or ignore if transaction ID already exists (for duplicate prevention)
-  Future<int> insertOrIgnoreTransaction(models.Transaction transaction) async {
-    final db = await _dbHelper.database;
+  Future<int> insertOrIgnoreTransaction(models.Transaction transaction,
+      {DatabaseExecutor? txn}) async {
+    final db = txn ?? await _dbHelper.database;
     return await db.insert(
       'transactions',
       transaction.toMap(),
@@ -50,10 +52,10 @@ class TransactionDAO {
   // ₹50 coffees on the same card in one day — so a real signal is now
   // required to treat a candidate as confirmed.
   Future<DuplicateMatch> findDuplicateMatch(
-      models.Transaction transaction) async {
+      models.Transaction transaction, {DatabaseExecutor? txn}) async {
     if (transaction.accountId == null) return DuplicateMatch.none;
 
-    final db = await _dbHelper.database;
+    final db = txn ?? await _dbHelper.database;
     final day = transaction.transactionDate;
     final dayStart = DateTime(day.year, day.month, day.day);
     final dayEnd = dayStart.add(const Duration(days: 1));
@@ -78,8 +80,12 @@ class TransactionDAO {
 
     for (final row in rows) {
       final existingRef = row['reference_number'] as String?;
-      if (existingRef != null && newRef != null && existingRef == newRef) {
-        return DuplicateMatch.confirmed;
+      if (existingRef != null && newRef != null) {
+        if (existingRef == newRef) {
+          return DuplicateMatch.confirmed;
+        } else {
+          continue; // distinct refs, so definitely distinct transactions
+        }
       }
 
       final existingMerchant = _normalizeMerchant(row['merchant'] as String?);
@@ -115,10 +121,11 @@ class TransactionDAO {
   Future<models.Transaction?> findOffsettingTransaction(
     models.Transaction transaction, {
     Duration window = const Duration(days: 2),
+    DatabaseExecutor? txn,
   }) async {
     if (transaction.accountId == null) return null;
 
-    final db = await _dbHelper.database;
+    final db = txn ?? await _dbHelper.database;
     final oppositeType =
         transaction.transactionType == 'debit' ? 'credit' : 'debit';
     final start = transaction.transactionDate.subtract(window);
@@ -128,7 +135,8 @@ class TransactionDAO {
       'transactions',
       where: 'account_id IS NOT NULL AND account_id != ? AND '
           'transaction_type = ? AND amount = ? AND '
-          'transaction_date >= ? AND transaction_date <= ?',
+          'transaction_date >= ? AND transaction_date <= ? AND '
+          'is_transfer = 0',
       whereArgs: [
         transaction.accountId,
         oppositeType,
@@ -136,17 +144,28 @@ class TransactionDAO {
         start.toIso8601String(),
         end.toIso8601String(),
       ],
-      limit: 1,
     );
 
     if (rows.isEmpty) return null;
-    return models.Transaction.fromMap(rows.first);
+
+    for (final row in rows) {
+      final rowAccountType = row['account_type'] as String?;
+      final hasSignal = transaction.isTransfer ||
+          transaction.accountType == 'credit_card' ||
+          rowAccountType == 'credit_card';
+      
+      if (hasSignal) {
+        return models.Transaction.fromMap(row);
+      }
+    }
+
+    return null;
   }
 
   // Marks both legs of an internal transfer so income/expense aggregates
   // exclude them while statements still show them.
-  Future<void> markTransferPair(int id1, int id2) async {
-    final db = await _dbHelper.database;
+  Future<void> markTransferPair(int id1, int id2, {DatabaseExecutor? txn}) async {
+    final db = txn ?? await _dbHelper.database;
     final batch = db.batch();
     batch.update('transactions', {'is_transfer': 1},
         where: 'id = ?', whereArgs: [id1]);
@@ -189,13 +208,14 @@ class TransactionDAO {
   }
 
   // Get transactions by account
-  Future<List<models.Transaction>> getTransactionsByAccount(int accountId) async {
+  Future<List<models.Transaction>> getTransactionsByAccount(int accountId, {int? limit}) async {
     final db = await _dbHelper.database;
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
       where: 'account_id = ?',
       whereArgs: [accountId],
       orderBy: 'transaction_date DESC',
+      limit: limit,
     );
     
     return List.generate(maps.length, (i) {
@@ -212,8 +232,9 @@ class TransactionDAO {
   // want. Matches _appendDateRange, which every other range query uses.
   Future<List<models.Transaction>> getTransactionsByDateRange(
     DateTime startDate,
-    DateTime endDate,
-  ) async {
+    DateTime endDate, {
+    int? limit,
+  }) async {
     final db = await _dbHelper.database;
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
@@ -223,8 +244,9 @@ class TransactionDAO {
         endDate.toIso8601String(),
       ],
       orderBy: 'transaction_date DESC',
+      limit: limit,
     );
-    
+
     return List.generate(maps.length, (i) {
       return models.Transaction.fromMap(maps[i]);
     });
@@ -290,8 +312,9 @@ class TransactionDAO {
   }
 
   // Get transaction by transaction ID (for duplicate detection)
-  Future<models.Transaction?> getTransactionByTransactionId(String transactionId) async {
-    final db = await _dbHelper.database;
+  Future<models.Transaction?> getTransactionByTransactionId(String transactionId,
+      {DatabaseExecutor? txn}) async {
+    final db = txn ?? await _dbHelper.database;
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
       where: 'transaction_id = ?',
@@ -470,18 +493,30 @@ class TransactionDAO {
   }
 
   // Get daily spending for the last N days. Excludes transfers.
+  //
+  // The boundary is computed in Dart local time and passed as a parameter
+  // rather than using SQLite's `DATE('now', ...)`, which operates in UTC.
+  // transaction_date strings are stored via Dart's DateTime.now().
+  // toIso8601String() (local time), so comparing against a UTC-derived
+  // boundary shifts the cutoff by the local UTC offset -- e.g. in UTC+5:30,
+  // transactions from the first 5.5 hours of a local day would be counted as
+  // belonging to the previous day (or dropped from the window entirely at
+  // the start/end edges).
   Future<Map<String, double>> getDailySpending(int days) async {
     final db = await _dbHelper.database;
+    final now = DateTime.now();
+    final boundary = DateTime(now.year, now.month, now.day)
+        .subtract(Duration(days: days));
     final List<Map<String, dynamic>> maps = await db.rawQuery(
       '''
       SELECT DATE(transaction_date) as date, SUM(amount) as total
       FROM transactions
       WHERE transaction_type = ? AND is_transfer = 0
-        AND transaction_date >= DATE('now', '-$days days')
+        AND transaction_date >= ?
       GROUP BY DATE(transaction_date)
       ORDER BY date
       ''',
-      ['debit'],
+      ['debit', boundary.toIso8601String()],
     );
     
     Map<String, double> dailySpending = {};
@@ -547,5 +582,88 @@ class TransactionDAO {
     );
     
     return maps.map((map) => map['category'] as String).toList();
+  }
+
+  // Get paginated transactions
+  Future<List<models.Transaction>> getPaginatedTransactions({
+    int limit = 50,
+    int offset = 0,
+    String? category,
+    DateTime? startDate,
+    DateTime? endDate,
+    int? accountId,
+    String? searchQuery,
+  }) async {
+    final db = await _dbHelper.database;
+    final clauses = <String>[];
+    final whereArgs = <dynamic>[];
+
+    // 'all' is the "no filter" sentinel used by TransactionsScreen's
+    // category dropdown (and the in-memory filter it replaced) -- not
+    // 'All'. A mismatch here means the default, no-filter state queries for
+    // a literal category named "all", which matches nothing.
+    if (category != null && category != 'all') {
+      clauses.add('category = ?');
+      whereArgs.add(category);
+    }
+    _appendDateRange(clauses, whereArgs, startDate, endDate);
+
+    if (accountId != null) {
+      clauses.add('account_id = ?');
+      whereArgs.add(accountId);
+    }
+
+    if (searchQuery != null && searchQuery.isNotEmpty) {
+      clauses.add('(description LIKE ? OR merchant LIKE ?)');
+      whereArgs.add('%$searchQuery%');
+      whereArgs.add('%$searchQuery%');
+    }
+
+    final String? whereString = clauses.isEmpty ? null : clauses.join(' AND ');
+
+    final List<Map<String, dynamic>> maps = await db.query(
+      'transactions',
+      where: whereString,
+      whereArgs: whereString == null ? null : whereArgs,
+      orderBy: 'transaction_date DESC',
+      limit: limit,
+      offset: offset,
+    );
+
+    return List.generate(maps.length, (i) {
+      return models.Transaction.fromMap(maps[i]);
+    });
+  }
+
+  // Get monthly spending for the last N months
+  Future<Map<String, double>> getMonthlySpending({int months = 6}) async {
+    try {
+      final db = await _dbHelper.database;
+      final now = DateTime.now();
+      final startDate = DateTime(now.year, now.month - months + 1, 1);
+      
+      final List<Map<String, dynamic>> maps = await db.rawQuery('''
+        SELECT 
+          strftime('%Y-%m', transaction_date) as month,
+          SUM(amount) as total
+        FROM transactions
+        WHERE transaction_type = 'debit'
+          AND is_transfer = 0 
+          AND transaction_date >= ?
+        GROUP BY month
+        ORDER BY month ASC
+      ''', [startDate.toIso8601String()]);
+      
+      final result = <String, double>{};
+      for (var map in maps) {
+        if (map['month'] != null) {
+          result[map['month'] as String] = (map['total'] as num).toDouble();
+        }
+      }
+      return result;
+    } catch (e, stackTrace) {
+      AppLogger.error('Error calculating monthly spending', e, stackTrace);
+      return {};
+    }
   }
 }

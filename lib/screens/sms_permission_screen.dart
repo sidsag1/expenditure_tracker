@@ -398,7 +398,8 @@ class _SMSPermissionScreenState extends State<SMSPermissionScreen> {
           'Your privacy is our priority. Here\'s how we protect your data:\n\n'
           '• SMS messages are read only from your device\n'
           '• No data is sent to external servers\n'
-          '• All financial information stays encrypted on your phone\n'
+          '• All financial information stays stored locally on your device, '
+          'protected by your device lock and app PIN\n'
           '• You can revoke SMS permission anytime\n'
           '• We only read messages from supported banks\n'
           '• Transaction data is processed locally for categorization',

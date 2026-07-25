@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/account.dart';
 import '../models/transaction.dart';
 import '../database/transaction_dao.dart';
 import '../database/category_dao.dart';
 import '../models/category.dart';
+import '../utils/constants.dart';
 import 'add_transaction_screen.dart';
 
 class TransactionsScreen extends StatefulWidget {
@@ -27,30 +29,64 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   String _selectedCategory = 'all';
   String _selectedDateRange = 'all'; // 'all', 'today', 'week', 'month', 'year'
   String _searchQuery = '';
+  
+  // Pagination
+  final ScrollController _scrollController = ScrollController();
+  int _offset = 0;
+  final int _limit = AppConstants.defaultPageSize;
+  bool _hasMore = true;
+  bool _isFetchingMore = false;
+  
+  Timer? _searchDebounce;
 
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_onScroll);
     _loadData();
   }
 
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    _searchDebounce?.cancel();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200 &&
+        !_isFetchingMore &&
+        _hasMore) {
+      _loadMoreTransactions();
+    }
+  }
+
   Future<void> _loadData() async {
+    if (_isFetchingMore) return; // Sequence guard: don't reload while paginating
     try {
+      if (!mounted) return;
       setState(() {
         _isLoading = true;
         _errorMessage = '';
+        _offset = 0;
+        _hasMore = true;
+        _transactions = [];
       });
 
       // Load categories
-      _categories = await _categoryDAO.getAllCategories();
-      
-      // Load transactions based on filters
-      await _loadTransactions();
+      final categories = await _categoryDAO.getAllCategories();
+      if (!mounted) return;
+      _categories = categories;
 
+      // Load initial transactions
+      await _fetchTransactions();
+
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = 'Failed to load transactions: ${e.toString()}';
         _isLoading = false;
@@ -58,37 +94,45 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     }
   }
 
-  Future<void> _loadTransactions() async {
-    // Base list: everything, or just the selected account's transactions
-    var transactions = widget.account != null
-        ? await _transactionDAO.getTransactionsByAccount(widget.account!.id!)
-        : await _transactionDAO.getAllTransactions();
-
-    // Apply the remaining filters in memory so they combine correctly
-    final dateRange = _dateRangeBounds();
-    if (dateRange != null) {
-      transactions = transactions
-          .where((t) =>
-              !t.transactionDate.isBefore(dateRange.$1) &&
-              !t.transactionDate.isAfter(dateRange.$2))
-          .toList();
-    }
-    if (_selectedCategory != 'all') {
-      transactions =
-          transactions.where((t) => t.category == _selectedCategory).toList();
-    }
-    if (_searchQuery.isNotEmpty) {
-      final query = _searchQuery.toLowerCase();
-      transactions = transactions
-          .where((t) =>
-              t.description.toLowerCase().contains(query) ||
-              (t.merchant ?? '').toLowerCase().contains(query) ||
-              t.amount.toString().contains(query))
-          .toList();
-    }
-
+  Future<void> _loadMoreTransactions() async {
+    if (_isFetchingMore || !_hasMore) return;
+    
     setState(() {
-      _transactions = transactions;
+      _isFetchingMore = true;
+    });
+    
+    try {
+      _offset += _limit;
+      await _fetchTransactions();
+    } catch (e) {
+      // Ignore load more errors
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isFetchingMore = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _fetchTransactions() async {
+    final dateRange = _dateRangeBounds();
+    final newTxns = await _transactionDAO.getPaginatedTransactions(
+      accountId: widget.account?.id,
+      category: _selectedCategory,
+      startDate: dateRange?.$1,
+      endDate: dateRange?.$2,
+      searchQuery: _searchQuery,
+      limit: _limit,
+      offset: _offset,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _transactions.addAll(newTxns);
+      if (newTxns.length < _limit) {
+        _hasMore = false;
+      }
     });
   }
 
@@ -99,19 +143,22 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       case 'today':
         return (
           DateTime(now.year, now.month, now.day),
-          DateTime(now.year, now.month, now.day, 23, 59, 59),
+          DateTime(now.year, now.month, now.day).add(const Duration(days: 1)),
         );
       case 'week':
-        return (now.subtract(const Duration(days: 7)), now);
+        return (
+          DateTime(now.year, now.month, now.day).subtract(const Duration(days: 6)),
+          DateTime(now.year, now.month, now.day).add(const Duration(days: 1)),
+        );
       case 'month':
         return (
           DateTime(now.year, now.month, 1),
-          DateTime(now.year, now.month + 1, 0, 23, 59, 59),
+          DateTime(now.year, now.month + 1, 1),
         );
       case 'year':
         return (
           DateTime(now.year, 1, 1),
-          DateTime(now.year, 12, 31, 23, 59, 59),
+          DateTime(now.year + 1, 1, 1),
         );
       default:
         return null;
@@ -233,7 +280,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           setState(() {
                             _selectedCategory = value;
                           });
-                          _loadTransactions();
+                          _loadData();
                         }
                       },
                     ),
@@ -270,7 +317,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           setState(() {
                             _selectedDateRange = value;
                           });
-                          _loadTransactions();
+                          _loadData();
                         }
                       },
                     ),
@@ -349,9 +396,18 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       onRefresh: _loadData,
       color: Colors.blue[400],
       child: ListView.builder(
+        controller: _scrollController,
         padding: const EdgeInsets.all(16),
-        itemCount: _transactions.length,
+        itemCount: _transactions.length + (_hasMore ? 1 : 0),
         itemBuilder: (context, index) {
+          if (index == _transactions.length) {
+            return const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Center(
+                child: CircularProgressIndicator(color: Colors.blue),
+              ),
+            );
+          }
           final transaction = _transactions[index];
           return _buildTransactionCard(transaction);
         },
@@ -464,9 +520,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   void _debouncedSearch() {
-    Future.delayed(const Duration(milliseconds: 500), () {
+    if (_searchDebounce?.isActive ?? false) _searchDebounce!.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 500), () {
       if (mounted) {
-        _loadTransactions();
+        _loadData();
       }
     });
   }
@@ -490,7 +547,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       ),
     );
     if (updated == true) {
-      _loadTransactions();
+      _loadData();
     }
   }
 
@@ -524,7 +581,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                       backgroundColor: Colors.green,
                     ),
                   );
-                  _loadTransactions();
+                  _loadData();
                 }
               } catch (e) {
                 if (mounted) {
@@ -552,7 +609,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       ),
     );
     if (added == true) {
-      _loadTransactions();
+      _loadData();
     }
   }
 }

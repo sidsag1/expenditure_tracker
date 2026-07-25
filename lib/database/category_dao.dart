@@ -189,12 +189,16 @@ class CategoryDAO {
     final existingCount = countResult.first['count'] as int;
     
     if (existingCount == 0) {
-      // Insert predefined categories
-      await _insertPredefinedCategories(db);
+      // Insert predefined categories. Wrapped in a transaction so a crash
+      // partway through (app killed, device power loss) can't leave only
+      // some predefined categories inserted -- a state this method's
+      // existingCount == 0 guard would never detect or repair on the next
+      // launch, since by then the count is no longer zero.
+      await db.transaction((txn) => _insertPredefinedCategories(txn));
     }
   }
 
-  Future<void> _insertPredefinedCategories(Database db) async {
+  Future<void> _insertPredefinedCategories(DatabaseExecutor db) async {
     for (Category category in Category.predefinedCategories) {
       await db.insert('categories', {
         'name': category.name,

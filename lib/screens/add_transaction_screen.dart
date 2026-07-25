@@ -86,6 +86,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             .name;
       }
 
+      if (!mounted) return;
       setState(() {});
     } catch (e, stackTrace) {
       AppLogger.error('Error loading data', e, stackTrace);

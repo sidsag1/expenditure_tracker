@@ -27,6 +27,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
 
   Future<void> _loadAccounts() async {
     try {
+      if (!mounted) return;
       setState(() {
         _isLoading = true;
         _errorMessage = '';
@@ -42,11 +43,13 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
           break;
       }
 
+      if (!mounted) return;
       setState(() {
         _accounts = accounts;
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = 'Failed to load accounts: ${e.toString()}';
         _isLoading = false;

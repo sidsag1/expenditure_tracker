@@ -258,6 +258,64 @@ Future<Database> _createV4Schema(String path) {
   );
 }
 
+// v5 is structurally identical to the current schema minus the v6 indexes:
+// all P2-1/P2-2/P2-3 columns already exist, since v6 only adds indexes.
+Future<Database> _createV5Schema(String path) {
+  return databaseFactory.openDatabase(
+    path,
+    options: OpenDatabaseOptions(
+      version: 5,
+      onCreate: (db, version) async {
+        await db.execute('''
+          CREATE TABLE accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_type TEXT NOT NULL,
+            bank_name TEXT NOT NULL,
+            account_number TEXT NOT NULL,
+            account_name TEXT NOT NULL,
+            current_balance REAL NOT NULL DEFAULT 0.0,
+            parent_account_id INTEGER,
+            debit_card_1 TEXT,
+            debit_card_2 TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER,
+            transaction_type TEXT NOT NULL,
+            amount REAL NOT NULL,
+            description TEXT NOT NULL,
+            merchant TEXT,
+            transaction_date TEXT NOT NULL,
+            reference_number TEXT,
+            transaction_id TEXT UNIQUE,
+            category TEXT NOT NULL DEFAULT 'Uncategorized',
+            bank_name TEXT NOT NULL,
+            account_type TEXT NOT NULL,
+            is_manual INTEGER NOT NULL DEFAULT 0,
+            is_pending INTEGER NOT NULL DEFAULT 0,
+            balance_after REAL,
+            is_transfer INTEGER NOT NULL DEFAULT 0,
+            needs_review INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT 'manual',
+            raw_message_hash TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL
+          )
+        ''');
+        await _createLegacyCategoriesAndIndexes(db);
+        await db.execute(
+            'CREATE INDEX idx_transactions_transaction_id ON transactions (transaction_id)');
+      },
+    ),
+  );
+}
+
 void main() {
   setUp(() async {
     await resetTestDatabase();
@@ -660,6 +718,58 @@ void main() {
       final remainingIds =
           (await db.query('transactions')).map((r) => r['id']).toSet();
       expect(remainingIds, {manualUnlinkedId, manualLinkedId});
+    });
+  });
+
+  group('v5 -> v6 (indexes for bank filtering and paginated/aggregate fetches)',
+      () {
+    test('adds the new indexes without touching existing rows', () async {
+      final path = await testDatabasePath();
+      final legacy = await _createV5Schema(path);
+      final now = DateTime.now().toIso8601String();
+      final accountId = await legacy.insert('accounts', {
+        'account_type': 'bank_account',
+        'bank_name': 'ICICI',
+        'account_number': 'XX1234',
+        'account_name': 'Primary',
+        'current_balance': 1000.0,
+        'is_active': 1,
+        'created_at': now,
+        'updated_at': now,
+      });
+      final transactionId = await legacy.insert('transactions', {
+        'account_id': accountId,
+        'transaction_type': 'debit',
+        'amount': 75.0,
+        'description': 'pre-migration row',
+        'transaction_date': now,
+        'category': 'Uncategorized',
+        'bank_name': 'ICICI',
+        'account_type': 'bank_account',
+        'is_manual': 1,
+        'created_at': now,
+        'updated_at': now,
+      });
+      await legacy.close();
+
+      final db = await DatabaseHelper.instance.database;
+
+      final indexes = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%'",
+      );
+      expect(
+        indexes.map((i) => i['name']).toSet(),
+        containsAll([
+          'idx_transactions_bank',
+          'idx_transactions_account_date',
+          'idx_transactions_type_transfer_date',
+        ]),
+      );
+
+      final transaction = (await db.query('transactions',
+              where: 'id = ?', whereArgs: [transactionId]))
+          .single;
+      expect(transaction['description'], 'pre-migration row');
     });
   });
 }

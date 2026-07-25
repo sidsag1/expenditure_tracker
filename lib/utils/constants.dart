@@ -29,6 +29,10 @@ class AppConstants {
     'Google Pay': ['GPAY', 'GOOGPAY'],
     'PhonePe': ['PHONEPE', 'PPLTFIP'],
     'Paytm': ['PYTM', 'PTYM'],
+    'Blinkit': ['BLNKIT', 'BLINKIT'],
+    'Zepto': ['ZEPTO'],
+    'MobiKwik': ['MOBIKWIK', 'MBKWIK'],
+    'Freecharge': ['FREECHARGE', 'FRECHG'],
   };
   
   // Categories: see Category.predefinedCategories (models/category.dart) for

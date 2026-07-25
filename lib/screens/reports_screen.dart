@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../database/transaction_dao.dart';
 import '../models/transaction.dart';
+import 'package:fl_chart/fl_chart.dart';
 import '../utils/formatters.dart';
 
 class ReportsScreen extends StatefulWidget {
@@ -14,6 +15,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
   final TransactionDAO _transactionDAO = TransactionDAO();
   
   List<Transaction> _transactions = [];
+  double _totalIncome = 0.0;
+  double _totalExpenses = 0.0;
+  Map<String, double> _categoryTotals = {};
+  // Sorted descending by amount once per data load, not on every build() --
+  // _buildPieChart used to re-sort categoryTotals.entries.toList() itself on
+  // every rebuild.
+  List<MapEntry<String, double>> _sortedCategoryEntries = [];
+  Map<String, double> _monthlyTotals = {};
   bool _isLoading = true;
   String _errorMessage = '';
   String _selectedPeriod = '30 days'; // Default to 30 days
@@ -33,6 +42,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   Future<void> _loadReportsData() async {
     try {
+      if (!mounted) return;
       setState(() {
         _isLoading = true;
         _errorMessage = '';
@@ -58,15 +68,32 @@ class _ReportsScreenState extends State<ReportsScreen> {
           startDate = now.subtract(const Duration(days: 30));
       }
 
-      final allTransactions = await _transactionDAO.getAllTransactions();
-      
+      final results = await Future.wait([
+        _transactionDAO.getTotalIncome(startDate: startDate),
+        _transactionDAO.getTotalExpenses(startDate: startDate),
+        _transactionDAO.getSpendingByCategory(startDate: startDate),
+        // Only the 5 most recent are ever shown (_buildTrendsList /
+        // _buildRecentTransactionsSummary both slice to 5) -- fetching every
+        // transaction in the period just to throw away all but 5 pulls the
+        // whole period into memory and onto the main thread for nothing.
+        _transactionDAO.getTransactionsByDateRange(startDate, now, limit: 5),
+        _transactionDAO.getMonthlySpending(months: 6),
+      ]);
+
+      if (!mounted) return;
+      final categoryTotals = results[2] as Map<String, double>;
       setState(() {
-        _transactions = allTransactions
-            .where((t) => t.transactionDate.isAfter(startDate))
-            .toList();
+        _totalIncome = results[0] as double;
+        _totalExpenses = results[1] as double;
+        _categoryTotals = categoryTotals;
+        _sortedCategoryEntries = categoryTotals.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value));
+        _transactions = results[3] as List<Transaction>;
+        _monthlyTotals = results[4] as Map<String, double>;
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = 'Failed to load reports data: ${e.toString()}';
         _isLoading = false;
@@ -123,20 +150,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Widget _buildReportsContent() {
-    // Transfers (e.g. a credit-card bill payment) move money between the
-    // user's own accounts rather than earning or spending it, so they're
-    // excluded from both totals — while still appearing in the transaction
-    // lists below, same as the DAO aggregates used elsewhere.
-    final totalIncome = _transactions
-        .where((t) => !t.isExpense && !t.isTransfer)
-        .fold(0.0, (sum, t) => sum + t.amount);
-
-    final totalExpenses = _transactions
-        .where((t) => t.isExpense && !t.isTransfer)
-        .fold(0.0, (sum, t) => sum + t.amount);
-    
-    final categoryTotals = _getCategoryTotals();
-
     return RefreshIndicator(
       onRefresh: _loadReportsData,
       color: Colors.blue[400],
@@ -151,16 +164,21 @@ class _ReportsScreenState extends State<ReportsScreen> {
             const SizedBox(height: 24),
             
             // Summary cards
-            _buildSummaryCards(totalIncome, totalExpenses),
+            _buildSummaryCards(_totalIncome, _totalExpenses),
             
             const SizedBox(height: 24),
             
             // Category breakdown
-            _buildCategoryBreakdown(categoryTotals),
+            _buildCategoryBreakdown(_categoryTotals),
             
             const SizedBox(height: 24),
             
-            // Transaction trends
+            // Monthly Trends Chart
+            _buildMonthlyTrends(),
+            
+            const SizedBox(height: 24),
+            
+            // Transaction trends list
             _buildTrendsList(),
             
             const SizedBox(height: 24),
@@ -306,8 +324,199 @@ class _ReportsScreenState extends State<ReportsScreen> {
             const SizedBox(height: 16),
             if (categoryTotals.isEmpty)
               _buildEmptyState('No transactions found for the selected period')
-            else
+            else ...[
+              _buildPieChart(categoryTotals),
+              const SizedBox(height: 24),
               ...categoryTotals.entries.map((entry) => _buildCategoryItem(entry.key, entry.value)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPieChart(Map<String, double> categoryTotals) {
+    if (_totalExpenses <= 0) return const SizedBox();
+
+    // Sorted once in _loadReportsData; take top 5 here, group rest into 'Other'.
+    final sortedEntries = _sortedCategoryEntries;
+
+    final List<PieChartSectionData> sections = [];
+    final colors = [
+      Colors.blue[400]!,
+      Colors.red[400]!,
+      Colors.green[400]!,
+      Colors.orange[400]!,
+      Colors.purple[400]!,
+      Colors.teal[400]!,
+    ];
+    
+    double otherAmount = 0;
+    for (int i = 0; i < sortedEntries.length; i++) {
+      if (i < 5) {
+        final percentage = (sortedEntries[i].value / _totalExpenses) * 100;
+        sections.add(PieChartSectionData(
+          color: colors[i % colors.length],
+          value: sortedEntries[i].value,
+          title: '${percentage.toStringAsFixed(0)}%',
+          radius: 50,
+          titleStyle: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ));
+      } else {
+        otherAmount += sortedEntries[i].value;
+      }
+    }
+    
+    if (otherAmount > 0) {
+      final percentage = (otherAmount / _totalExpenses) * 100;
+      sections.add(PieChartSectionData(
+        color: colors[5],
+        value: otherAmount,
+        title: '${percentage.toStringAsFixed(0)}%',
+        radius: 50,
+        titleStyle: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
+      ));
+    }
+
+    return SizedBox(
+      height: 200,
+      child: PieChart(
+        PieChartData(
+          sectionsSpace: 2,
+          centerSpaceRadius: 40,
+          sections: sections,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMonthlyTrends() {
+    return Card(
+      color: const Color(0xFF1a1a2e),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Monthly Trends (Last 6 Months)',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 24),
+            if (_monthlyTotals.isEmpty)
+              _buildEmptyState('No data for monthly trends')
+            else ...[
+              Builder(
+                builder: (context) {
+                  final maxValue = _monthlyTotals.values.isEmpty 
+                      ? 0.0 
+                      : _monthlyTotals.values.reduce((a, b) => a > b ? a : b);
+                  final maxY = maxValue > 0 ? maxValue * 1.2 : 100.0;
+                  final horizontalInterval = maxValue > 0 ? (maxValue / 4).ceilToDouble() : 25.0;
+                  
+                  return SizedBox(
+                    height: 200,
+                    child: BarChart(
+                      BarChartData(
+                        alignment: BarChartAlignment.spaceAround,
+                        maxY: maxY,
+                    barTouchData: BarTouchData(
+                      enabled: true,
+                      touchTooltipData: BarTouchTooltipData(
+                        getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                          return BarTooltipItem(
+                            formatINR(rod.toY),
+                            const TextStyle(color: Colors.white),
+                          );
+                        },
+                      ),
+                    ),
+                    titlesData: FlTitlesData(
+                      show: true,
+                      bottomTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          getTitlesWidget: (value, meta) {
+                            final index = value.toInt();
+                            if (index >= 0 && index < _monthlyTotals.keys.length) {
+                              final key = _monthlyTotals.keys.elementAt(index);
+                              // Format YYYY-MM to short month (e.g. Jan)
+                              final parts = key.split('-');
+                              if (parts.length == 2) {
+                                final month = int.tryParse(parts[1]) ?? 1;
+                                const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                                return Padding(
+                                  padding: const EdgeInsets.only(top: 8.0),
+                                  child: Text(
+                                    monthNames[month - 1],
+                                    style: TextStyle(color: Colors.grey[400], fontSize: 10),
+                                  ),
+                                );
+                              }
+                            }
+                            return const SizedBox();
+                          },
+                        ),
+                      ),
+                      leftTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 40,
+                          getTitlesWidget: (value, meta) {
+                            if (value == 0) return const SizedBox();
+                            return Text(
+                              '${(value / 1000).toStringAsFixed(0)}k',
+                              style: TextStyle(color: Colors.grey[400], fontSize: 10),
+                            );
+                          },
+                        ),
+                      ),
+                      topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                      rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    ),
+                    gridData: FlGridData(
+                      show: true,
+                      drawVerticalLine: false,
+                      horizontalInterval: horizontalInterval == 0 ? 1 : horizontalInterval,
+                      getDrawingHorizontalLine: (value) {
+                        return const FlLine(
+                          color: Colors.white10,
+                          strokeWidth: 1,
+                        );
+                      },
+                    ),
+                    borderData: FlBorderData(show: false),
+                    barGroups: _monthlyTotals.entries.toList().asMap().entries.map((entry) {
+                      return BarChartGroupData(
+                        x: entry.key,
+                        barRods: [
+                          BarChartRodData(
+                            toY: entry.value.value,
+                            color: Colors.blue[400],
+                            width: 16,
+                            borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                          ),
+                        ],
+                      );
+                    }).toList(),
+                  ),
+                ),
+              );
+                },
+              ),
+            ],
           ],
         ),
       ),
@@ -315,11 +524,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Widget _buildCategoryItem(String category, double amount) {
-    final totalExpenses = _transactions
-        .where((t) => t.isExpense && !t.isTransfer)
-        .fold(0.0, (sum, t) => sum + t.amount);
-    
-    final percentage = totalExpenses > 0 ? (amount / totalExpenses) * 100 : 0.0;
+    final percentage = _totalExpenses > 0 ? (amount / _totalExpenses) * 100 : 0.0;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -407,15 +612,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            SizedBox(
-              height: 200,
-              child: _transactions.isEmpty
-                  ? _buildEmptyState('No transactions for trends')
-                  : ListView.builder(
-                      itemCount: _transactions.length,
-                      itemBuilder: (context, index) {
-                        final transaction = _transactions[index];
-                        return Container(
+            if (_transactions.isEmpty)
+              _buildEmptyState('No transactions for trends')
+            else
+              ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _transactions.length > 5 ? 5 : _transactions.length,
+                itemBuilder: (context, index) {
+                  final transaction = _transactions[index];
+                  return Container(
                           margin: const EdgeInsets.only(bottom: 8),
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
@@ -472,7 +678,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         );
                       },
                     ),
-            ),
           ],
         ),
       ),
@@ -584,23 +789,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
         ],
       ),
     );
-  }
-
-  Map<String, double> _getCategoryTotals() {
-    final Map<String, double> categoryTotals = {};
-    
-    for (final transaction in _transactions) {
-      if (transaction.isExpense && !transaction.isTransfer) {
-        categoryTotals[transaction.category] =
-            (categoryTotals[transaction.category] ?? 0) + transaction.amount;
-      }
-    }
-    
-    // Sort by amount descending
-    final sortedEntries = categoryTotals.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    
-    return Map.fromEntries(sortedEntries);
   }
 
   String _formatDate(DateTime date) {

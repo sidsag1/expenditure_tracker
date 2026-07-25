@@ -27,8 +27,8 @@ class AccountDAO {
   }
 
   // Get active accounts only
-  Future<List<Account>> getActiveAccounts() async {
-    final db = await _dbHelper.database;
+  Future<List<Account>> getActiveAccounts({DatabaseExecutor? txn}) async {
+    final db = txn ?? await _dbHelper.database;
     final List<Map<String, dynamic>> maps = await db.query(
       'accounts',
       where: 'is_active = ?',
@@ -119,29 +119,31 @@ class AccountDAO {
   // isn't guaranteed chronological, and the whole inbox is rescanned on every
   // sync) can't clobber a fresher balance with a stale one. Returns whether
   // the update was applied.
+  //
+  // The read-then-write is a single atomic UPDATE ... WHERE ? >= updated_at
+  // rather than a separate SELECT + Dart isBefore check + UPDATE: two SMS
+  // parser callbacks racing this (e.g. two sync batches, or a batch and a
+  // manual edit) could otherwise both read the same "current" row before
+  // either writes, and the older message would win depending on write order.
+  // Row-level locking inside a single SQL statement closes that window.
   Future<bool> updateBalanceIfNewer(
     int accountId,
     double balance,
-    DateTime asOf,
-  ) async {
-    final db = await _dbHelper.database;
-    final rows =
-        await db.query('accounts', where: 'id = ?', whereArgs: [accountId]);
-    if (rows.isEmpty) return false;
-
-    final current = Account.fromMap(rows.first);
-    if (asOf.isBefore(current.updatedAt)) return false;
-
-    await db.update(
+    DateTime asOf, {
+    DatabaseExecutor? txn,
+  }) async {
+    final db = txn ?? await _dbHelper.database;
+    final asOfIso = asOf.toIso8601String();
+    final rowsAffected = await db.update(
       'accounts',
       {
         'current_balance': balance,
-        'updated_at': asOf.toIso8601String(),
+        'updated_at': asOfIso,
       },
-      where: 'id = ?',
-      whereArgs: [accountId],
+      where: 'id = ? AND DATE(?) >= DATE(updated_at)',
+      whereArgs: [accountId, asOfIso],
     );
-    return true;
+    return rowsAffected > 0;
   }
 
   // Delete account (soft delete - set is_active to false)

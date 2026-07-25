@@ -12,12 +12,11 @@ import 'screens/onboarding_screen.dart';
 import 'screens/pin_setup_screen.dart';
 import 'screens/pin_entry_screen.dart';
 import 'screens/sms_permission_screen.dart';
-import 'screens/dashboard_screen.dart';
-import 'screens/account_management_screen.dart';
-import 'screens/add_account_screen.dart';
+import 'screens/home_shell.dart';
 import 'screens/account_detail_screen.dart';
 import 'screens/transactions_screen.dart';
 import 'screens/add_transaction_screen.dart';
+import 'screens/add_account_screen.dart';
 import 'screens/reports_screen.dart';
 
 void main() async {
@@ -68,7 +67,7 @@ class ExpenditureTrackerApp extends StatelessWidget {
             return MaterialPageRoute(
               builder: (context) => PinEntryScreen(
                 onSuccess: () {
-                  Navigator.of(context).pushReplacementNamed('/dashboard');
+                  Navigator.of(context).pushReplacementNamed('/home');
                 },
               ),
             );
@@ -76,17 +75,15 @@ class ExpenditureTrackerApp extends StatelessWidget {
             return MaterialPageRoute(
               builder: (context) => SMSPermissionScreen(
                 onPermissionGranted: () {
-                  Navigator.of(context).pushReplacementNamed('/accounts');
+                  Navigator.of(context).pushReplacementNamed('/home');
                 },
                 onPermissionDenied: () {
-                  Navigator.of(context).pushReplacementNamed('/accounts');
+                  Navigator.of(context).pushReplacementNamed('/home');
                 },
               ),
             );
-          case '/dashboard':
-            return MaterialPageRoute(builder: (_) => const DashboardScreen());
-          case '/accounts':
-            return MaterialPageRoute(builder: (_) => const AccountManagementScreen());
+          case '/home':
+            return MaterialPageRoute(builder: (_) => const HomeShell());
           case '/add_account':
             return MaterialPageRoute(builder: (_) => const AddAccountScreen());
           case '/account_detail':

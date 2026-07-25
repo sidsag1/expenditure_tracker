@@ -38,7 +38,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 5,
+      version: 7,
       onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
       onCreate: _createDatabase,
       onUpgrade: _upgradeDatabase,
@@ -111,6 +111,13 @@ class DatabaseHelper {
     await db.execute('CREATE INDEX idx_transactions_transaction_id ON transactions (transaction_id)');
     await db.execute('CREATE INDEX idx_accounts_bank ON accounts (bank_name)');
     await db.execute('CREATE INDEX idx_accounts_type ON accounts (account_type)');
+    await db.execute('CREATE INDEX idx_transactions_bank ON transactions (bank_name)');
+    await db.execute(
+        'CREATE INDEX idx_transactions_account_date ON transactions (account_id, transaction_date)');
+    await db.execute(
+        'CREATE INDEX idx_transactions_type_transfer_date ON transactions (transaction_type, is_transfer, transaction_date)');
+    await db.execute(
+        'CREATE INDEX idx_transactions_amount_type_date ON transactions (amount, transaction_type, transaction_date)');
 
     // Insert predefined categories
     await _insertPredefinedCategories(db);
@@ -208,9 +215,24 @@ class DatabaseHelper {
         where: 'is_manual = 0',
       );
     }
+    if (oldVersion < 6) {
+      // v6: bank-filtered dashboard queries and paginated/aggregate
+      // transaction fetches were doing full-table scans and an in-memory
+      // filesort with no supporting index.
+      await db.execute('CREATE INDEX idx_transactions_bank ON transactions (bank_name)');
+      await db.execute(
+          'CREATE INDEX idx_transactions_account_date ON transactions (account_id, transaction_date)');
+      await db.execute(
+          'CREATE INDEX idx_transactions_type_transfer_date ON transactions (transaction_type, is_transfer, transaction_date)');
+    }
+    if (oldVersion < 7) {
+      // v7: index for findOffsettingTransaction
+      await db.execute(
+          'CREATE INDEX idx_transactions_amount_type_date ON transactions (amount, transaction_type, transaction_date)');
+    }
   }
 
-  Future<void> _insertPredefinedCategories(Database db) async {
+  Future<void> _insertPredefinedCategories(DatabaseExecutor db) async {
     for (Category category in Category.predefinedCategories) {
       await db.insert('categories', {
         'name': category.name,
@@ -246,13 +268,18 @@ class DatabaseHelper {
     await db.close();
   }
 
-  // Clear all data (for testing)
+  // Clear all data (for testing). Wrapped in a single transaction so a crash
+  // partway through can't leave the database with some tables wiped and
+  // others (or the predefined-category reseed) not, which the app has no
+  // way to detect or repair on next launch.
   Future<void> clearAllData() async {
     final db = await database;
-    await db.delete('transactions');
-    await db.delete('accounts');
-    await db.delete('categories');
-    await _insertPredefinedCategories(db);
+    await db.transaction((txn) async {
+      await txn.delete('transactions');
+      await txn.delete('accounts');
+      await txn.delete('categories');
+      await _insertPredefinedCategories(txn);
+    });
   }
 
   // Deletes the database file outright (as opposed to clearAllData, which

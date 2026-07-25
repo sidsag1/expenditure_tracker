@@ -184,6 +184,107 @@ void main() {
     });
   });
 
+  group('generic sign determination (P3-4)', () {
+    test('"not credited" is not mis-signed as a credit by the bag-of-words '
+        'contains("credited") check', () async {
+      final txn = await parser.parseSMS(
+        'Rs.500.00 paid but not credited to beneficiary account XX1234 on 12-Jul-26. Please contact your branch.',
+        'PNB',
+      );
+
+      expect(txn, isNull);
+    });
+
+    test('"not debited" is likewise not mis-signed as a debit', () async {
+      final txn = await parser.parseSMS(
+        'Rs.500.00 was not debited from your account XX1234 on 12-Jul-26 due to a technical issue.',
+        'PNB',
+      );
+
+      expect(txn, isNull);
+    });
+
+    test('a declined transaction is not recorded at all', () async {
+      final txn = await parser.parseSMS(
+        'Your card payment of Rs.500.00 on card XX1234 on 12-Jul-26 was declined due to insufficient funds.',
+        'PNB',
+      );
+
+      expect(txn, isNull);
+    });
+
+    test('a refund is recorded as a credit, not a debit', () async {
+      final txn = await parser.parseSMS(
+        'Rs.500.00 refund deposited to your account XX1234 on 12-Jul-26 for order 998877.',
+        'PNB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.transactionType, 'credit');
+      expect(txn.amount, 500.00);
+    });
+
+    test('a reversed payment is recorded as a credit', () async {
+      final txn = await parser.parseSMS(
+        'Rs.500.00 debited earlier has been reversed to your account XX1234 on 12-Jul-26.',
+        'PNB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.transactionType, 'credit');
+    });
+
+    test('an ordinary debit alert is unaffected by the new sign checks',
+        () async {
+      final txn = await parser.parseSMS(
+        'Rs.500.00 debited from your account XX1234 on 12-Jul-26 towards UPI payment.',
+        'PNB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.transactionType, 'debit');
+    });
+  });
+
+  group('merchant extraction (P3-2)', () {
+    test(
+        'a word containing "on" is not truncated by the old unanchored '
+        'terminator (the "MONITOR" -> "M" regression)', () async {
+      final txn = await parser.parseSMS(
+        'Rs.500.00 debited from PNB Bank A/c XX1234 at MONITOR on 12-Jul-25. Ref No 123456.',
+        'PNB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.merchant, 'MONITOR');
+    });
+
+    test('"ONLINE" is not truncated to empty by the old terminator',
+        () async {
+      final txn = await parser.parseSMS(
+        'Rs.250.00 debited from PNB Bank A/c XX1234 at ONLINE STORE on 12-Jul-25. Ref No 654321.',
+        'PNB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.merchant, 'ONLINE STORE');
+    });
+
+    test('a digits-only anchor match (a phone number, not a merchant) is discarded',
+        () async {
+      // "SMS BLOCK 340 to 9215676766" is dispute-line boilerplate, not a
+      // payee -- the "to" anchor must not turn the phone number into a
+      // "merchant".
+      final txn = await parser.parseSMS(
+        'ICICI Bank Acct XX340 debited for Rs 50.00 on 11-Oct-25; VENDOR credited. UPI:528407948322. Call 18002662 for dispute. SMS BLOCK 340 to 9215676766.',
+        'ICICIB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.merchant, isNull);
+    });
+  });
+
   group('promotional and informational messages', () {
     test('loan/deal advertisement with an amount is rejected', () async {
       final txn = await parser.parseSMS(
@@ -223,6 +324,32 @@ void main() {
       final txn = await parser.parseSMS(
         'HDFC Bank Credit Card 6955 bill of Rs. 56539.2 can be paid in parts. Convert txns into EMIs. Check eligibility:https://hdfcbk.io/HDFCBK/s/epo4jBxl',
         'HDFCBK',
+      );
+      expect(txn, isNull);
+    });
+
+    test(
+        'a real debit alert containing "Do not share" and a "Know more" link '
+        'still parses (P3-1: strong transaction signature overrides the '
+        'broad marker list)', () async {
+      final txn = await parser.parseSMS(
+        'ICICI Bank Acct XX340 debited for Rs 1500.00 on 15-Jul-26 at BIG BAZAAR. Do not share your OTP/CVV with anyone. Know more at icicibank.com',
+        'ICICIB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.transactionType, 'debit');
+      expect(txn.amount, 1500.00);
+      expect(txn.merchant, 'BIG BAZAAR');
+    });
+
+    test('an actual OTP delivery is rejected even if it reads like a strong signature',
+        () async {
+      // Contains an amount, an account token and a date, but is still just
+      // an OTP -- the hard-veto list must win regardless of signature shape.
+      final txn = await parser.parseSMS(
+        'Your OTP for a card transaction of Rs 1500.00 on Account XX340 dated 15-Jul-26 is 445566. Do not share.',
+        'ICICIB',
       );
       expect(txn, isNull);
     });
@@ -560,6 +687,99 @@ void main() {
       expect(txn!.source, 'sms');
       expect(txn.rawMessageHash, isNotNull);
       expect(txn.rawMessageHash, hasLength(64)); // sha256 hex digest
+    });
+  });
+
+  group('regex edge cases (codebase review fixes)', () {
+    test('Kotak debit card amount with a space after Rs is parsed', () async {
+      final txn = await parser.parseSMS(
+        'Rs 499.00 spent via Kotak Debit Card XX1234 at SWIGGY on 12-Jul-25. Not you? Call 18602662666.',
+        'KOTAKB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.amount, 499.00);
+      expect(txn.merchant, 'SWIGGY');
+    });
+
+    test('ICICI credit card amount with Rs (no dot) is parsed', () async {
+      final txn = await parser.parseSMS(
+        'Rs 630.00 spent using ICICI Bank Card XX4016 on 19-Oct-25 on INDIGO AIRLINE.',
+        'ICICIB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.amount, 630.00);
+      expect(txn.accountType, 'credit_card');
+    });
+
+    test('SBI UPI debit with a currency prefix before the amount is parsed',
+        () async {
+      final txn = await parser.parseSMS(
+        'A/C X1234 debited by Rs.500.00 on date 30Sep25 trf to AMAZON PAY Refno 601912345678',
+        'CBSSBI',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.transactionType, 'debit');
+      expect(txn.amount, 500.00);
+      expect(txn.merchant, 'AMAZON PAY');
+      expect(txn.transactionDate, DateTime(2025, 9, 30));
+    });
+
+    test('space-separated date ("30 Sep 25") is parsed, not defaulted to receivedAt',
+        () async {
+      final receivedAt = DateTime(2026, 1, 1);
+      final txn = await parser.parseSMS(
+        'Rs. 250.00 debited from HDFC Bank A/c XX9876 on 30 Sep 25 to VPA merchant@upi.',
+        'HDFCBK',
+        receivedAt: receivedAt,
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.transactionDate, DateTime(2025, 9, 30));
+    });
+
+    test('"Avl Bal:" with a colon before the currency is still extracted',
+        () async {
+      final txn = await parser.parseSMS(
+        'Rs.2000.00 spent via Kotak Debit Card XX7297 at SAFRESH on 10/12/2025. Avl Bal: Rs.247.77',
+        'KOTAKB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.balanceAfter, 247.77);
+    });
+
+    test('"Ref.No.123" with no whitespace around the dots is extracted',
+        () async {
+      final txn = await parser.parseSMS(
+        'Rs. 250.00 debited from HDFC Bank A/c XX9876 on 12/07/25 to VPA merchant@upi. Ref.No.123456.',
+        'HDFCBK',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.referenceNumber, '123456');
+    });
+
+    test('a hyphenated reference number is captured in full', () async {
+      final txn = await parser.parseSMS(
+        'Rs. 250.00 debited from HDFC Bank A/c XX9876 on 12/07/25 to VPA merchant@upi. Ref No: 123-456.',
+        'HDFCBK',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.referenceNumber, '123-456');
+    });
+
+    test('"Payment request received" is a UPI collect request, not money '
+        'actually received, and is rejected', () async {
+      final txn = await parser.parseSMS(
+        'Payment request received of Rs 500 from john@upi via PhonePe. Approve on your UPI app.',
+        'PYTM',
+      );
+
+      expect(txn, isNull);
     });
   });
 }

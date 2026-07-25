@@ -8,6 +8,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:expenditure_tracker/database/account_dao.dart';
+import 'package:expenditure_tracker/database/database_helper.dart';
 import 'package:expenditure_tracker/database/transaction_dao.dart';
 import 'package:expenditure_tracker/models/account.dart';
 import 'package:expenditure_tracker/services/sms_parser_service.dart';
@@ -90,6 +91,118 @@ void main() {
     });
   });
 
+  group('account matching (P3-3)', () {
+    test(
+        'a digit run shorter than 3 digits does not bind to an account; the '
+        'transaction is imported unassigned and flagged needs_review instead '
+        'of being silently dropped', () async {
+      await registerAccount(
+          bankName: 'Punjab National Bank', accountNumber: 'XX9318');
+      // The only digits near an account/card keyword are "18" -- a 2-digit
+      // suffix, which used to be enough to (wrongly) bind to an account
+      // ending in ...318.
+      const message =
+          'Rs.500.00 debited from PNB Bank Card 18 on 12-Jul-26 towards POS purchase.';
+
+      final txn = await parser.parseSMS(message, 'PNB');
+      expect(await parser.saveTransaction(txn!, sourceMessage: message),
+          isTrue);
+
+      final saved = (await transactionDAO.getAllTransactions()).single;
+      expect(saved.accountId, isNull);
+      expect(saved.needsReview, isTrue);
+    });
+
+    test(
+        'multiple accounts at the same bank with no identifying digits in '
+        'the message is imported unassigned and flagged needs_review, not '
+        "guessed at (the old bankAccounts.first behaviour)", () async {
+      await registerAccount(
+          bankName: 'Punjab National Bank', accountNumber: 'XX1111');
+      await registerAccount(
+          bankName: 'Punjab National Bank', accountNumber: 'XX2222');
+      const message =
+          'Rs.500.00 debited from your PNB Bank on 12-Jul-26 towards UPI payment to merchant.';
+
+      final txn = await parser.parseSMS(message, 'PNB');
+      expect(await parser.saveTransaction(txn!, sourceMessage: message),
+          isTrue);
+
+      final saved = (await transactionDAO.getAllTransactions()).single;
+      expect(saved.accountId, isNull);
+      expect(saved.needsReview, isTrue);
+    });
+
+    test('a message for a bank the user has not registered any account for '
+        'is dropped, not imported unassigned', () async {
+      // No account registered at all -- unlike the ambiguous/unmatched
+      // cases above, there is no tracked bank to attach this to.
+      const message =
+          'Rs.500.00 debited from your PNB Bank on 12-Jul-26 towards UPI payment to merchant.';
+
+      final txn = await parser.parseSMS(message, 'PNB');
+      expect(await parser.saveTransaction(txn!, sourceMessage: message),
+          isFalse);
+      expect(await transactionDAO.getTransactionCount(), 0);
+    });
+
+    test('a confident 3+ digit suffix match still binds normally', () async {
+      final account = await registerAccount(
+          bankName: 'Punjab National Bank', accountNumber: 'XX9318');
+      const message =
+          'Rs.500.00 debited from PNB Bank Card 318 on 12-Jul-26 towards POS purchase.';
+
+      final txn = await parser.parseSMS(message, 'PNB');
+      expect(await parser.saveTransaction(txn!, sourceMessage: message),
+          isTrue);
+
+      final saved = (await transactionDAO.getAllTransactions()).single;
+      expect(saved.accountId, account.id);
+      expect(saved.needsReview, isFalse);
+    });
+  });
+
+  group('activeAccounts caching (batch sync query thrashing fix)', () {
+    test(
+        'a pre-fetched activeAccounts list is used for matching instead of '
+        're-querying the DB, so it still matches even after the account is '
+        'deactivated in between the fetch and the save', () async {
+      final account = await registerAccount(
+          bankName: 'Punjab National Bank', accountNumber: 'XX9318');
+      final snapshot = await parser.loadActiveAccounts();
+
+      // Deactivate after the snapshot was taken -- getActiveAccounts()
+      // called fresh at save time would no longer return this account.
+      await accountDAO.deleteAccount(account.id!);
+
+      const message =
+          'Rs.500.00 debited from PNB Bank Card 318 on 12-Jul-26 towards POS purchase.';
+      final txn = await parser.parseSMS(message, 'PNB');
+      expect(
+          await parser.saveTransaction(txn!,
+              sourceMessage: message, activeAccounts: snapshot),
+          isTrue);
+
+      final saved = (await transactionDAO.getAllTransactions()).single;
+      expect(saved.accountId, account.id);
+    });
+
+    test('omitting activeAccounts falls back to querying the DB as before',
+        () async {
+      final account = await registerAccount(
+          bankName: 'Punjab National Bank', accountNumber: 'XX9318');
+      const message =
+          'Rs.500.00 debited from PNB Bank Card 318 on 12-Jul-26 towards POS purchase.';
+
+      final txn = await parser.parseSMS(message, 'PNB');
+      expect(await parser.saveTransaction(txn!, sourceMessage: message),
+          isTrue);
+
+      final saved = (await transactionDAO.getAllTransactions()).single;
+      expect(saved.accountId, account.id);
+    });
+  });
+
   group('balance propagation (P2-1)', () {
     test('a parsed balance updates the account when newer than the current one',
         () async {
@@ -148,5 +261,38 @@ void main() {
       final saved = (await transactionDAO.getAllTransactions()).single;
       expect(saved.isTransfer, isFalse);
     });
+  });
+
+  group('batched sync does not deadlock (P4-1 regression)', () {
+    test(
+        'saveTransaction completes when called from inside db.transaction(), '
+        'the same way SMSService.syncMessages batches a sync -- every DB call '
+        'it makes (duplicate checks, insert, balance update, transfer '
+        'matching) must go through the passed txn rather than a fresh '
+        'db.database call, or this deadlocks against the open transaction',
+        () async {
+      await registerAccount();
+      const firstMessage =
+          'ICICI Bank Acct XX340 debited for Rs 50.00 on 11-Oct-25; VENDOR A credited. UPI:100000000001.';
+      const secondMessage =
+          'ICICI Bank Acct XX340 debited for Rs 75.00 on 12-Oct-25; VENDOR B credited. UPI:100000000002.';
+
+      final first = await parser.parseSMS(firstMessage, 'ICICIB');
+      final second = await parser.parseSMS(secondMessage, 'ICICIB');
+
+      final db = await DatabaseHelper().database;
+      await db.transaction((txn) async {
+        expect(
+            await parser.saveTransaction(first!,
+                sourceMessage: firstMessage, txn: txn),
+            isTrue);
+        expect(
+            await parser.saveTransaction(second!,
+                sourceMessage: secondMessage, txn: txn),
+            isTrue);
+      });
+
+      expect(await transactionDAO.getTransactionCount(), 2);
+    }, timeout: const Timeout(Duration(seconds: 15)));
   });
 }

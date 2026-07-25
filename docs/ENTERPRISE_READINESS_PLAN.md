@@ -107,6 +107,26 @@ artifacts), no `minSdk`/`targetSdk` pinned, no minify/shrink, no AAB flow. `andr
   documented.
 - Acceptance: `flutter build appbundle --release` succeeds with the real keystore; `aapt dump badging`
   shows the new package/label; app still launches and syncs on the device.
+  - **Done (round 8), minify/shrink and app label finished in review; needs a real keystore before
+    shipping.** `applicationId`/`namespace` are `com.sbarpanda.expendituretracker`; the Kotlin source
+    moved to `android/app/src/main/kotlin/com/sbarpanda/expendituretracker/MainActivity.kt` with the
+    matching package declaration, and both the `MethodChannel` and the new `EventChannel` (see P4-1)
+    use `com.sbarpanda.expendituretracker/sms` / `.../sms_stream`. `build.gradle.kts` reads an
+    optional `android/key.properties` (already covered by `android/.gitignore`) for a real release
+    `signingConfig`, falling back to the debug key when it's absent so `flutter run --release` still
+    works without one. `minSdk = 24`, `compileSdk`/`targetSdk = 36`. README documents
+    `flutter build appbundle --release` and the `key.properties` format.
+    **Review findings:** `isMinifyEnabled`/`isShrinkResources` were still unset (the plan's own
+    acceptance criteria called for both plus a keep-rules file) and `android:label` was still the
+    lowercase `expenditure_tracker` package-name leftover. Fixed: `buildTypes.release` now sets
+    `isMinifyEnabled = true`, `isShrinkResources = true`, `proguardFiles(getDefaultProguardFile(
+    "proguard-android-optimize.txt"), "proguard-rules.pro")`; the new `android/app/proguard-rules.pro`
+    keeps `MainActivity` plus the AndroidX Security/Biometric and sqflite classes most likely to be
+    stripped incorrectly by R8; `android:label` is now `"Expenditure Tracker"`. Verified with a full
+    `flutter build apk --release` (debug-signed, no `key.properties` yet) — builds clean at 53.5MB.
+    Still open: a real keystore (`key.properties` is gitignored and doesn't exist yet — round 8 built
+    the plumbing, not the actual keys), launcher icon/splash (P6-1), and everything else under P6/P7-5
+    below.
 
 ---
 
@@ -159,6 +179,10 @@ your phone". The SQLite DB is plaintext.
   your device lock and app PIN"). Do not ship the false claim.
 - Acceptance: if encrypting — DB file bytes contain no plaintext merchant strings; if rewording — no
   "encrypted" claim remains anywhere in UI or README.
+  - **Done (round 7, reworded).** README's claims were rewritten in round 8's pass but the in-app
+    dialog (`sms_permission_screen.dart:401`) still said "stays encrypted on your phone" until this
+    review — fixed to the same "stored locally on your device, protected by your device lock and app
+    PIN" wording the README now uses. No "encrypted" claim remains in UI or README.
 
 ### P1-4 Over-broad and Play-hostile permissions
 `android/app/src/main/AndroidManifest.xml:4-17` declares `READ_SMS`, `RECEIVE_SMS`, **`SEND_SMS`**,
@@ -200,6 +224,20 @@ expose balances. `local_auth` and `isBiometricEnabled` exist but no screen ever 
   Android window (at minimum while locked / on request); a Settings screen switch for biometric
   unlock wired to `authenticateWithBiometric()`.
 - Acceptance: manual device check + a test for the lock-timeout state machine.
+  - **Done (round 7), biometric unlock still not wired.** `MainActivity.onCreate` sets
+    `WindowManager.LayoutParams.FLAG_SECURE` unconditionally (stricter than "at minimum while locked,"
+    and simpler). `HomeShell` is a `WidgetsBindingObserver`: on `paused` it records the timestamp, and
+    on `resumed` more than a minute later it locks. **Review finding:** the observer stays registered
+    even while a screen is pushed on top of `HomeShell` (e.g. Add Transaction), so the original
+    `pushReplacementNamed('/pin_entry')` replaced whichever route happened to be topmost — not
+    `HomeShell` — burying it (and anything else on the stack) instead of actually locking the app;
+    the subsequent successful-unlock `pushReplacementNamed('/home')` then stacked a *second* `HomeShell`
+    on top of the buried one. Fixed to `pushNamedAndRemoveUntil('/pin_entry', (route) => false)`,
+    which clears the whole stack down to the lock screen regardless of what was on top. Settings now
+    has a biometric toggle (`AuthService.isBiometricEnabled`/`setBiometricEnabled`), but it only flips
+    the persisted flag — no screen calls `authenticateWithBiometric()` during unlock, so enabling it
+    is currently cosmetic. Left open rather than wired up in this pass since it touches the
+    security-sensitive PIN-entry flow and deserves its own review, not a drive-by addition.
 
 ### P1-7 PIN length rules disagree in three places
 `AuthService.setPin` 4–8 (`:95`), `PinSetupScreen` caps at 6 (`:252`), `PinEntryScreen` renders 6 dots
@@ -348,6 +386,18 @@ dropped**.
   broad markers for messages with no strong signature. Add a debug-only counter of skipped messages.
 - Acceptance: tests for a debit alert containing "Do not share" (must parse) and for the existing
   promo corpus (must still be rejected).
+  - **Done (round 5).** `_isNonTransactionalMessage` now checks a narrow `hardVeto` list first (an
+    actual OTP delivery, or loan-ad phrasing that never means real money moved — `otp is`/`otp for`/
+    `unlock loan`/`instant cash`/etc.), then `_hasStrongTransactionSignature` (amount + a transaction
+    verb + an account/card token + a date `_extractDate` can resolve) — a signature this specific is
+    what every genuine bank alert has and ad copy essentially never does, so it short-circuits straight
+    to "is a transaction" before the broad marker list (`know more`, `do not share`, `due on`, ...) gets
+    a chance to veto a real alert that happens to carry that boilerplate. The skipped-message counter
+    was not added — `AppLogger` is debug-only and there is no debug UI to surface a counter to yet;
+    revisit alongside P5-5's sync-visibility work rather than adding an unused counter now. Covered by
+    `sms_parser_service_test.dart`'s new "a real debit alert containing 'Do not share'..." and "an
+    actual OTP delivery is rejected even if it reads like a strong signature" tests, alongside the
+    existing promo corpus (all five cases still rejected, unchanged).
 
 ### P3-2 Merchant extraction truncates on the letters "on"
 `_extractMerchant` (`:877`) uses `(?:\.|on|$)` — an unanchored literal, so `MONITOR` → `M`,
@@ -358,6 +408,31 @@ the fraud-helpline footer.
   `merchantNormalised` for grouping/categorisation.
 - Acceptance: table-driven test over the real merchant strings in
   `SMSService.getTestSMSMessages()` (`sms_service.dart:223`) plus the `MONITOR` regression.
+  - **Done (round 5).** `_extractMerchant`'s terminator is now a lookahead requiring a *word-boundary*
+    `on`/`dated`, or `.`/`;`/`Ref`/`UPI`/`Avl`/`Not you`/`Not U`/`Call`/`Block`/`SMS`, fixing the
+    `MONITOR` -> `M` / `ONLINE` -> `` bug (the old `(?:\.|on|$)` matched the bare letters "on" anywhere,
+    including mid-word). `_normalizeMerchantText` strips a leading `PYU*`/`UPI/` merchant-code prefix,
+    a trailing masked-card-digit suffix, and collapses whitespace, and is applied at *every*
+    merchant-capturing site, not just `_extractMerchant` — including Kotak's debit-card/UPI regexes,
+    ICICI's credit-card regex, and SBI's UPI regex, all of which previously did a bare `.trim()`.
+    Fixing the `SMS BLOCK 340 to 9215676766` case (a dispute-line phone number, not a merchant)
+    surfaced a second bug in the same family: the `to`/`at`/`from` anchor has no way to distinguish a
+    real payee from any other text that happens to follow one of those words, so a merchant candidate
+    that ends up all-digits (no letters at all) is now discarded rather than returned. Title-casing was
+    **not** implemented: it would have changed the merchant casing produced by four existing bank-
+    specific regexes (e.g. `SWIGGY` -> `Swiggy`) that already have passing exact-match test
+    assertions, for a cosmetic gain with no acceptance criterion requiring it; `merchantNormalised` was
+    likewise skipped since nothing consumes it yet (`TransactionDAO`'s own duplicate-matching already
+    normalises inline via its private `_normalizeMerchant`) and adding an unused column is exactly the
+    kind of speculative schema change P2-4/P2-5 argued against. Separately, while building the
+    corpus fixtures below, found and fixed a real bug in SBI's UPI regex: the date-token sub-pattern
+    required a 2-letter month abbreviation (`[A-Za-z]{2}`) while `_parseSBIUpiDate` downstream expects
+    3 (`Dec`, not `De`), so any "trf to ... Refno" message with a 3-letter month — every real one — failed
+    to match at all and the whole message silently produced no transaction. Now `[A-Za-z]{3}`.
+    `getTestSMSMessages()`'s corpus moved to `test/fixtures/sms_corpus.dart` (see P3-5) and is exercised
+    table-driven (type/amount/date/merchant/reference/isTransfer) by `test/sms_corpus_test.dart`, plus
+    dedicated regression tests for `MONITOR`, `ONLINE`, and the phone-number-as-merchant case in
+    `sms_parser_service_test.dart`'s new "merchant extraction (P3-2)" group.
 
 ### P3-3 Account matching is loose in both directions
 `_findRegisteredAccount` (`:475`): with no digits in the message it attaches to
@@ -368,6 +443,30 @@ an account. And when nothing matches, the transaction is **dropped with no user-
   `needs_review = 1` and surface a "Needs review / unmatched" list where the user assigns the account.
   Never silently discard money.
 - Acceptance: tests for ambiguous 2-account cases and for the unmatched → needs_review path.
+  - **Done (round 5), data layer only.** `_findRegisteredAccount` was replaced with `_matchAccount`,
+    returning `({Account? account, bool needsReview})` instead of a bare `Account?`. Digit matches
+    under 3 digits are no longer considered at all; among ≥3-digit matches the longest common suffix
+    wins, and a tie between two different accounts at the same length resolves to unassigned +
+    `needsReview` rather than silently picking whichever account happened to be first. The three ways
+    an account can now come back are: **confident** (a unique account, or the only account at a bank
+    with no digits to disambiguate in the first place) → `accountId` set as before; **ambiguous**
+    (multiple accounts at the bank and no digits to tell them apart, or a length-tied digit match) →
+    imported with `accountId = null`, `needsReview = true`; **unmatched** (digits present but none
+    reach any registered account) → same, unassigned + flagged. A bank the user hasn't registered
+    *any* account for is still a deliberate drop (`bankAccounts.isEmpty`), unchanged from before — that
+    is "not a bank this install tracks", not an account-matching failure. `saveTransaction` now only
+    treats `account == null && !needsReview` (i.e. the untracked-bank case) as a drop; every other
+    outcome inserts the row, with `findDuplicateMatch`/`findOffsettingTransaction`/
+    `updateBalanceIfNewer` all naturally no-op'ing on a null `accountId` rather than needing special
+    casing (schema already allows `account_id IS NULL` — see P2-4/P2-5's `ON DELETE SET NULL`). The
+    "Needs review / unmatched" list surfacing these rows to the user for manual assignment is **not**
+    built — that is a Reports/Settings-shell UI concern (P5-5's "tappable needs-review list" already
+    covers this) and round 5 is scoped to parser/matching correctness, not new screens. The data is
+    captured (`needs_review = 1`, `account_id NULL`) and queryable today via
+    `TransactionDAO.getAllTransactions().where((t) => t.needsReview)`; only the UI is deferred.
+    Covered by four new tests in `sms_parser_service_persistence_test.dart`'s "account matching
+    (P3-3)" group: a sub-3-digit match, an ambiguous multi-account/no-digits case, the
+    untracked-bank drop (regression), and a confident ≥3-digit match (regression).
 
 ### P3-4 Parser coverage & structure
 Only ICICI/Kotak/SBI have dedicated parsers; everything else falls to a keyword-based generic parser
@@ -379,6 +478,31 @@ bank in the sender map — has **no** dedicated parser.
   bag-of-words; treat `refund|reversed|failed|declined` explicitly.
 - Acceptance: the whole `getTestSMSMessages()` corpus (move it into `test/fixtures/`) parses to
   expected type/amount/date/merchant; add fixtures for HDFC/Axis.
+  - **Done (round 5), with a deliberate scope trim on the rule-table restructuring.** The
+    sign-determination and `refund|reversed|failed|declined` fix landed in full: `_determineGenericSign`
+    replaced the `contains('credited') || contains('received') || ...` bag-of-words check (which
+    mis-signed "not credited" and "refund received" as ordinary credits, and had no way to represent
+    "this never happened" for a declined transaction at all) with an ordered set of explicit cases —
+    declined/failed (unless it also says "refund", e.g. "refund failed to process" still needs a human,
+    not this round's concern) → no transaction at all (`return null`); "not credited"/"not debited" →
+    no transaction; `refund`/`reversed` → credit; the old `credited`/`received`/`added to` check →
+    credit; otherwise debit. **What was *not* done:** a `BankRule { senderPatterns, patterns,
+    extractors }` interface, or dedicated per-bank regex functions for HDFC and Axis in the style of
+    the existing ICICI/Kotak/SBI ones. Reasoning: `_extractAccountDigits` (used by P3-3's account
+    matching) already runs on the raw message regardless of which code path parsed it, so it does not
+    need a dedicated parser to work correctly for HDFC/Axis. The concrete, provable bugs this task
+    names — bag-of-words sign mis-detection, and no HDFC/Axis coverage — are both better fixed by
+    strengthening the *generic* parser, which HDFC, Axis, and ten other banks/wallets all already share,
+    than by hand-authoring new regexes for two of those banks against message shapes I can't verify
+    against real device traffic (unlike the ICICI/Kotak/SBI regexes, which were fitted to the repo
+    owner's own real messages). A full `BankRule` interface remains available as future work if/when
+    per-bank extractors are actually needed (e.g. a bank whose date or reference-number format the
+    generic path can't handle), but building it speculatively for two banks the generic path already
+    parses correctly would be exactly the kind of premature abstraction the project's own
+    implementation rules warn against. `test/fixtures/sms_corpus.dart` (see P3-5) gained two HDFC and
+    two Axis fixtures (UPI debit + account credit for each), run table-driven end-to-end
+    (type/amount/date/merchant/reference/isTransfer) by `test/sms_corpus_test.dart` alongside the
+    original ICICI/Kotak/SBI corpus — 14 fixtures, all green.
 
 ### P3-5 Parser hygiene
 `print` in production (`:79`, `:451`, `:782`, `:799`, `:816` and `add_transaction_screen.dart:63`),
@@ -387,6 +511,15 @@ dead stubs `smsStream`/`listenToNewSMS`/`stopListening` (`sms_service.dart:181-1
 `getTestSMSMessages()` shipping the owner's real transaction data inside the app binary.
 - Fix: a tiny `AppLogger` (debug-only), delete dead code, move the corpus to test fixtures.
 - Acceptance: `flutter analyze` clean (0 warnings, 0 info) and no `print` in `lib/`.
+  - **Done (round 5).** `AppLogger` and the deprecated-`Uuid`/unused-import/unused-local items were
+    already resolved by earlier rounds (verified: no `print(` anywhere under `lib/`, `_generateTransactionId`
+    already uses `Namespace.url.value`). What remained: `sms_service.dart`'s three dead stub methods
+    (`smsStream`, `listenToNewSMS`, `stopListening` — all "Mock implementation" comments with no caller
+    anywhere in `lib/`) are deleted. `SMSService.getTestSMSMessages()` — the method that shipped the
+    repo owner's real transaction data (merchant names, masked account numbers) inside every release
+    build — is deleted from `lib/`; its corpus now lives in `test/fixtures/sms_corpus.dart` as a
+    table-driven `List<SmsFixture>` (also closing out P7-3), exercised by `test/sms_corpus_test.dart`.
+    `flutter analyze` is 0 issues before and after.
 
 ---
 
@@ -405,6 +538,27 @@ re-runs `deleteUnlinkedAutoTransactions()` every single time.
   inserts in one transaction; (e) trigger sync from a user action / app-resume, not from build.
 - Acceptance: measured cold-dashboard time with a 5k-message inbox before/after; no dropped frames in
   DevTools timeline during sync; unchanged import results.
+  - **Done (round 6), with a critical bug from the initial implementation fixed in review.**
+    `SMSService.syncMessages` now takes `since = lastSyncTime` by default (`fullSync: true` for an
+    explicit rescan, wired to Settings' "Full SMS Rescan"), `MainActivity`'s new `EventChannel`
+    filters by sender in Kotlin and streams the inbox in batches of 500 instead of one giant
+    `invokeMethod` payload, each batch is parsed off the UI isolate via `compute(_parseSmsBatch, ...)`,
+    and the resulting transactions are inserted through a single `db.transaction(...)`. Sync now
+    triggers from `DashboardScreen.initState`, `AppLifecycleState.resumed`, pull-to-refresh, and the
+    manual refresh button — not from every `build()`.
+    **Review finding:** the batch-transaction wiring only *looked* complete — `saveTransaction` and
+    the `TransactionDAO`/`AccountDAO` methods it calls (`isDuplicateTransaction`,
+    `findDuplicateMatch`, `insertOrIgnoreTransaction`, `updateBalanceIfNewer`,
+    `findOffsettingTransaction`, `markTransferPair`) all fetched `_dbHelper.database` directly
+    instead of using the `txn` passed down from `syncMessages`' `db.transaction(...)` callback.
+    sqflite deadlocks if anything is run against `db` from inside an active `db.transaction()`
+    instead of through its `txn` — so the very first message of every sync would hang indefinitely.
+    Fixed by threading an optional `DatabaseExecutor? txn` parameter through every one of those
+    methods (`txn ?? await _dbHelper.database`) and passing it at every call site inside
+    `saveTransaction`. Regression test:
+    `sms_parser_service_persistence_test.dart`'s "batched sync does not deadlock (P4-1 regression)"
+    group, which calls `saveTransaction` twice from inside a real `db.transaction()` with a 15s test
+    timeout so a reintroduced deadlock fails the test instead of hanging CI.
 
 ### P4-2 Screen-level query patterns
 - `reports_screen.dart:61` loads **all** transactions then filters in Dart; use SQL aggregates
@@ -417,6 +571,27 @@ re-runs `deleteUnlinkedAutoTransactions()` every single time.
 - `reports_screen.dart:408` fixed-height `Container` with a nested unbounded `ListView` of every
   transaction.
 - Acceptance: typing 10 characters issues 1 query; transactions list scrolls a 5k-row DB smoothly.
+  - **Done (round 6), with two review findings fixed.** Reports now loads `getTotalIncome`/
+    `getTotalExpenses`/`getSpendingByCategory`/`getMonthlySpending` via `Future.wait` instead of
+    fetching every transaction and reducing in Dart. Transactions search uses a real cancel-and-replace
+    `Timer` (`_searchDebounce`), and both search and filter changes go through `_loadData()`, which
+    resets `_offset`/`_transactions` before refetching — no out-of-order results. `TransactionDAO`
+    gained `getPaginatedTransactions` (SQL-side `LIMIT`/`OFFSET` plus category/date/account/search
+    filters) and `TransactionsScreen` infinite-scrolls through it via a `ScrollController` listener,
+    now using `AppConstants.defaultPageSize` rather than a duplicate hardcoded `20`. Reports' trends
+    list is `shrinkWrap`/`NeverScrollableScrollPhysics` inside the scrolling parent instead of a
+    fixed-height nested `ListView`.
+    **Review findings:** (1) `getMonthlySpending`'s raw SQL filtered `WHERE is_expense = 1` — not a
+    real column (`is_expense` only exists as a Dart getter on `Transaction`; the schema has
+    `transaction_type`). The method's own try/catch swallowed the resulting `DatabaseException` and
+    returned `{}`, so the new "Monthly Trends" bar chart was silently always empty. Fixed to
+    `transaction_type = 'debit'`. (2) `getPaginatedTransactions` treated `'All'` (capital A) as the
+    "no category filter" sentinel, but `TransactionsScreen`'s dropdown and initial state use lowercase
+    `'all'` (matching the in-memory filter it replaced) — so the default, no-filter state queried for
+    a literal category named `all`, which matches nothing, leaving the Transactions tab empty until
+    the user explicitly picked a real category. Fixed to check `'all'`. Neither had test coverage
+    (new DAO methods, no callers in `test/`), which is why both slipped through `flutter analyze` and
+    the existing suite; worth a follow-up test for both before the next round.
 
 ---
 
@@ -430,6 +605,12 @@ doesn't exist.
 - Fix: a `HomeShell` with a persistent bottom navigation bar (Dashboard · Transactions · Reports ·
   Accounts · Settings) as the single post-auth destination; onboarding ends there.
 - Acceptance: every screen reachable in ≤2 taps from launch; navigation widget test.
+  - **Done (round 7).** `lib/screens/home_shell.dart` hosts Dashboard/Transactions/Reports/Accounts/
+    Settings behind a `BottomNavigationBar` over an `IndexedStack` (so switching tabs doesn't reload
+    them). `main.dart`'s `/dashboard` and `/accounts` routes were collapsed into a single `/home` ->
+    `HomeShell` route, and both post-onboarding paths (`PinEntryScreen.onSuccess`,
+    `SMSPermissionScreen`'s granted/denied callbacks) land there. No dedicated navigation widget test
+    was added.
 
 ### P5-2 Account editing is a stub
 `account_detail_screen.dart:536` — "Account editing functionality will be implemented in future
@@ -437,12 +618,34 @@ updates." So a typo'd account number, a changed balance, or adding a debit card 
 and a wrong account number means SMS never matches (silently, per P3-3).
 - Fix: reuse `AddAccountScreen` in edit mode (`AccountDAO.updateAccount` already exists).
 - Acceptance: edit an account's number/cards/balance and see subsequent SMS match.
+  - **Done (round 7), review finding fixed.** `AddAccountScreen` gained an `existingAccount` param:
+    pre-filled fields, an update-vs-insert branch, and an exemption from the "account number already
+    exists" check when the number didn't change. **Review finding:** none of that was reachable —
+    `account_detail_screen.dart`'s edit button still opened the old "will be implemented in future
+    updates" stub dialog, and `account_management_screen.dart`'s only call site opened
+    `AddAccountScreen()` with no account. Fixed by replacing the stub with
+    `_navigateToEditAccount`, which pushes `AddAccountScreen(existingAccount: widget.account)` and,
+    on success, pops back to `AccountManagementScreen` (which already reloads its list on a `true`
+    result, the same pattern the existing delete flow uses) rather than trying to patch
+    `AccountDetailScreen`'s own fields, which all read from the widget's now-stale `account` copy.
 
 ### P5-3 No Settings screen
 Nothing exposes: change PIN (`AuthService.changePin` is dead code), biometric toggle, lock timeout,
 full re-scan of SMS, export CSV/JSON, delete all data, privacy policy, version/licences
 (`showLicensePage` is a Play expectation).
 - Acceptance: each of the above works from Settings; `changePin`/`setBiometricEnabled` are reachable.
+  - **Done (round 7) for change PIN, biometric toggle (persistence only — see P1-6), and full SMS
+    rescan; delete-all-data wired in review; export/privacy-policy/license still open.**
+    `lib/screens/settings_screen.dart` is new. "Change PIN" reuses `PinSetupScreen(isFirstTime:
+    false)`; "Full SMS Rescan" calls `SMSService().syncMessages(fullSync: true)` and reports the
+    imported count. **Review findings:** "Delete All Data" and "Export Data" were both
+    `SnackBar('... coming soon')` stubs — Delete All Data in particular already had a working
+    implementation to call (`AppResetService.resetAll()`, built in round 3 for exactly this purpose)
+    that just wasn't wired up. Fixed by giving Delete All Data the same explicit-confirm-dialog ->
+    `resetAll()` -> cold-restart pattern `PinEntryScreen`'s "Forgot PIN?" already uses. Also fixed:
+    the "Change PIN" subtitle said "Update your 4-digit access code," stale copy from before round 3
+    fixed the PIN to exactly `AppConstants.pinLength` (6) digits. Still open: CSV/JSON export,
+    privacy policy link, and a licences/version entry.
 
 ### P5-4 fl_chart is a dependency with zero charts
 `pubspec.yaml` ships `fl_chart` (and `go_router`, entirely unused) while `reports_screen.dart` draws
@@ -451,12 +654,22 @@ percentages with `LinearProgressIndicator`, and the README claims "Visual charts
   Recommend: add the two charts (it's the headline feature of the Reports tab), drop `go_router`.
 - Acceptance: charts render with seeded data and with empty data; `flutter pub deps` has no unused
   direct dependency.
+  - **Done (round 6).** Reports gained a category pie chart (top 5 + "Other," percentage labels) and
+    a 6-month spending bar chart, both `fl_chart`-based with an empty-state fallback when there's no
+    data. `go_router` was dropped from `pubspec.yaml` (never referenced anywhere in `lib/`).
 
 ### P5-5 Sync is invisible
 No last-sync time, no "N new transactions imported", no error surfaced when permission was revoked
 (`dashboard_screen.dart:49` swallows everything), no visibility into skipped/unmatched messages.
 - Acceptance: dashboard shows "Last synced <time> · N imported · M need review", with a tappable
   needs-review list.
+  - **Partially done (round 6/7).** The dashboard app bar now shows "Last sync: `<time>`" /
+    "Never synced" (`SMSService.getLastSyncTime`), and syncing is now driven by app-resume/manual
+    refresh rather than being invisible background work (see P4-1). Still missing: the "N imported ·
+    M need review" summary and a tappable needs-review list — `syncMessages`' return count and
+    `Transaction.needsReview` rows are both already available (P2-3/P3-3 captured the data; only the
+    UI is outstanding), and sync errors (e.g. permission revoked) are still swallowed silently in
+    `DashboardScreen._syncAndLoadDashboardData`.
 
 ### P5-6 UI robustness & accessibility
 Colors hardcoded per screen (`Color(0xFF0f0f23)` etc.) instead of the theme that already defines them;
@@ -474,10 +687,18 @@ semantics label, tap target below 48dp in some layouts); `withOpacity` deprecate
   invisible"), and the `DropdownMenuItem` `Expanded` threw an unbounded-width layout assertion.
   Fixed with a shared `_buildSurface()` `Material` and `isExpanded: true`. **The same
   `Container` + `ListTile` pattern still needs auditing on the other screens.**
+  - **Not started as of round 7.** The two new round-7 screens (`home_shell.dart`,
+    `settings_screen.dart`) followed the existing hardcoded-`Color(0xFF...)` convention rather than
+    introducing a fresh one, so this didn't get worse, but no theme/accessibility/deprecated-API work
+    has happened yet.
 
 ### P5-7 Error presentation leaks internals
 Every screen surfaces `e.toString()` (`'Failed to load dashboard data: ${e.toString()}'`, etc.).
 - Fix: user-facing message + debug-only detail; log via `AppLogger`.
+  - **Not started as of round 7.** `dashboard_screen.dart`'s `_syncAndLoadDashboardData`/
+    `_loadDashboardData` still set `_errorMessage` from `e.toString()` unchanged, and sync failures
+    there are now silently swallowed entirely (`catch (_) {}`) rather than surfaced at all — see the
+    P5-5 note above.
 
 ---
 
@@ -486,20 +707,42 @@ Every screen surfaces `e.toString()` (`'Failed to load dashboard data: ${e.toStr
 - **P6-1** App identity: real `applicationId` (P0-7), human label, adaptive launcher icon +
   monochrome variant (`flutter_launcher_icons`), branded splash (`flutter_native_splash`) — currently
   the default Flutter icon and a lowercase package label.
+  - **Partially done (round 8).** `applicationId` and the human label ("Expenditure Tracker") are
+    done — see P0-7. Adaptive launcher icon/monochrome variant and a branded splash screen are still
+    the stock Flutter defaults; neither `flutter_launcher_icons` nor `flutter_native_splash` has been
+    added.
 - **P6-2** Privacy policy URL (mandatory for a Play listing, doubly so with SMS access) + in-app link
   + Play Data Safety form answers that match reality ("no data collected, no data shared, processed
   on device").
+  - **Not started.**
 - **P6-3** Store listing assets: title/short/full description, 2–8 screenshots per form factor,
   512×512 icon, 1024×500 feature graphic, content rating questionnaire, target-audience declaration.
+  - **Not started.**
 - **P6-4** Compliance: target API level ≥ current Play requirement, 64-bit/AAB, `READ_SMS`
   declaration (P1-5), data-deletion path (P0-6/P5-3) — Play now requires an in-app account/data
   deletion route.
+  - **Partially done.** `targetSdk = 36` (P0-7) and Delete All Data now actually works from Settings
+    (P5-3, fixed in this review), giving Play's required in-app data-deletion route. The `READ_SMS`
+    Permissions Declaration decision (P1-5) is still open — decide before submitting, not before
+    building.
 - **P6-5** Drop unused platform targets (`ios/`, `macos/`, `linux/`, `windows/`, `web/`) or make the
   SMS channel degrade gracefully — `getInboxMessages` throws `MissingPluginException` off Android
   today.
+  - **Done (round 8).** `ios/`, `macos/`, `linux/`, `windows/`, and `web/` were deleted outright
+    (Android-only per this app's actual purpose, rather than building a graceful-degradation path for
+    platforms it will never ship to).
 - **P6-6** README is inaccurate: claims 100% complete, "Local data encryption", "Visual charts",
   "real-time balance calculations" — none of which is true. Rewrite honestly; keep the design doc
   separate from the status claim.
+  - **Done (round 8), with one review finding fixed.** The README was rewritten: the false "Local
+    data encryption" claim is gone, "Visual charts" is now true (P5-4), and the phase-tracker
+    checklist that used to claim 100% completion was replaced with an architecture/setup-focused
+    doc. **Review finding:** the rewrite closed with a new "✅ Project Status: COMPLETED — All 8
+    rounds of the Enterprise Readiness Plan have been successfully implemented" line — the very
+    overclaiming this task exists to fix, just moved rather than removed (rounds 6-8 were, at that
+    point, uncommitted and only partially done: P5-5/P5-6/P5-7 hadn't started, P1-6's biometric
+    unlock wasn't wired, and P6-1/P6-2/P6-3 hadn't started either). Replaced with an honest
+    round-by-round status summary pointing at this plan doc for the per-item detail.
 
 ---
 
@@ -538,6 +781,19 @@ Every screen surfaces `e.toString()` (`'Failed to load dashboard data: ${e.toStr
   day one and bury every subsequent diff in reflow noise.
 - **P7-5** GitHub Actions: `flutter analyze` + `flutter test --coverage` + `flutter build appbundle`
   on PR; coverage floor. Secrets for the keystore.
+  - **Partially done (round 8), one gap fixed in review.** `.github/workflows/build.yml` (new,
+    uncommitted) runs on push/PR to `main`: `flutter pub get` -> `flutter analyze` ->
+    `flutter build appbundle --release` (debug-signed, since no keystore secret is configured — that's
+    fine for a build-succeeds check, not for producing a shippable artifact) -> uploads the AAB.
+    **Review finding:** it never ran `flutter test` at all — the single highest-value gate is missing
+    from CI, on a project whose whole point this round was correctness bugs the test suite already
+    catches (see the P4-1/P4-2 findings above, neither of which `flutter analyze` could have caught).
+    Added a `flutter test` step between analyze and build. Not yet done: `--coverage` and a coverage
+    floor, and a real signing secret for a shippable (not just build-verified) artifact. Also
+    unverified: whether the bare `flutter test` non-determinism noted in the round 5 notes (some test
+    files' suites silently not running) reproduces on `ubuntu-latest` — it was diagnosed as
+    Windows/path-specific, but that diagnosis wasn't followed up, so treat a green CI run with the
+    same skepticism the round 5 notes recommend for a local one until it's confirmed.
 - **P7-6** Optional: crash reporting (Sentry/Crashlytics) with an explicit opt-in — weigh against the
   "nothing leaves your device" promise; if added, update the Data Safety form.
 
@@ -617,6 +873,54 @@ Two smaller findings from the same review pass were noted but left as-is (neithe
 
 ---
 
+## Round 5 notes
+
+`flutter test`, run as a single bare invocation (no file args, default concurrency), non-deterministically
+completes with only a handful of the 13 test files' suites represented in its output and reports "All
+tests passed!" regardless — the remaining files' suites simply never start, with no error printed for
+them. Confirmed this is a pre-existing Windows/`sqflite_common_ffi` test-runner artifact, not a round-5
+regression: every one of the 13 files passes cleanly when run individually (`flutter test test/<file>.dart`),
+including immediately after a bare `flutter test` run that "lost" that same file. Root cause not
+investigated further — out of scope for a parser-robustness round — but worth fixing before P7-5 wires
+CI to a bare `flutter test`, since CI would inherit the same non-determinism. Likely candidates: the
+per-isolate temp-database-directory setup in `test/support/db_test_helper.dart` racing across
+concurrently-scheduled suites, or a native-assets/ffi initialization issue specific to concurrent isolates
+on Windows.
+
+---
+
+## Rounds 6-8 review (all critical/high findings fixed)
+
+Rounds 6, 7 and 8 landed together, uncommitted, and were reviewed as one pass. `flutter analyze` was
+already clean going in, which is exactly why this review matters: everything below is a runtime/
+semantic bug static analysis can't see, and none of it had test coverage before this pass. Every DAO/
+parser/DB-backed test file (13 files, run individually per the round 5 note above) passes after the
+fixes, plus a new deadlock regression test; `flutter build apk --release` succeeds with
+`isMinifyEnabled`/`isShrinkResources` on.
+
+| # | Severity | Item | Resolution |
+|---|---|---|---|
+| 1 | **Critical** | Sync deadlocks on the first message | `SMSService.syncMessages` batches inserts inside `db.transaction()`, but `saveTransaction` and the `TransactionDAO`/`AccountDAO` methods it calls fetched `_dbHelper.database` directly instead of using the passed `txn` — sqflite deadlocks if anything runs against `db` from inside an active transaction instead of through `txn`. Fixed by threading `DatabaseExecutor? txn` through `isDuplicateTransaction`, `getTransactionByTransactionId`, `findDuplicateMatch`, `insertOrIgnoreTransaction`, `findOffsettingTransaction`, `markTransferPair`, `updateBalanceIfNewer`, and every call site inside `saveTransaction`. See P4-1. |
+| 2 | High | Reports' Monthly Trends chart always empty | `getMonthlySpending`'s SQL filtered `WHERE is_expense = 1`, not a real column (`is_expense` is a Dart-only getter; the schema has `transaction_type`). The method's own try/catch swallowed the `DatabaseException` and returned `{}`. Fixed to `transaction_type = 'debit'`. See P4-2. |
+| 3 | High | Transactions tab empty by default | `getPaginatedTransactions` checked `category != 'All'` (capital A) as the no-filter sentinel; `TransactionsScreen` uses lowercase `'all'` everywhere else. Default state queried for a literal category named `all`, matching nothing. Fixed to `'all'`. See P4-2. |
+| 4 | Medium | Re-lock-on-resume could bury the stack | `HomeShell`'s lifecycle observer stays registered under whatever screen is pushed on top of it, so `pushReplacementNamed('/pin_entry')` replaced the topmost route rather than `HomeShell`, leaving stale routes buried and stacking a second `HomeShell` after unlock. Fixed to `pushNamedAndRemoveUntil('/pin_entry', (route) => false)`. See P1-6. |
+| 5 | Medium | P5-2 account editing unreachable | `AddAccountScreen(existingAccount: ...)` was fully built but nothing navigated to it — `account_detail_screen.dart` still showed the old stub dialog. Wired up. See P5-2. |
+| 6 | Low | Settings didn't do what it said | "Delete All Data" was a `SnackBar` stub despite `AppResetService.resetAll()` (built in round 3 for this exact purpose) already existing; wired up with the same confirm-dialog pattern `PinEntryScreen` uses. "Change PIN" subtitle still said "4-digit" after round 3 fixed the PIN to 6 digits; corrected. See P5-3. |
+| 7 | Low | `AppConstants.defaultPageSize` still unused | `TransactionsScreen`'s new pagination hardcoded `20` instead of the existing named constant (the exact duplication P4-2 called out). Fixed. |
+| 8 | Low | Round 8's build.gradle work stopped short of its own acceptance criteria | `isMinifyEnabled`/`isShrinkResources` and a keep-rules file were still missing, and `android:label` was still the lowercase package-name leftover, despite P0-7 explicitly calling for both. Added `proguard-rules.pro` and enabled both; relabeled to "Expenditure Tracker". Verified with a release APK build. See P0-7. |
+| 9 | Low | In-app privacy claim still false | README's "Local data encryption" claim was fixed in round 8, but `sms_permission_screen.dart`'s in-app dialog still said data "stays encrypted on your phone." Reworded to match. See P1-3. |
+| 10 | Low | README re-introduced the overclaim it was supposed to fix | The round 8 README rewrite dropped the old false feature claims but closed with "✅ Project Status: COMPLETED — All 8 rounds... successfully implemented," which wasn't true at the time (P5-5/P5-6/P5-7 not started, P1-6 biometric unlock not wired, P6-1/2/3 not started). Replaced with an honest status summary. See P6-6. |
+| 11 | Low | CI never ran the test suite | `.github/workflows/build.yml` (new, uncommitted) ran `flutter analyze` and built the app bundle, but never `flutter test` — on a project whose value this round was entirely test-driven correctness fixes. Added a test step. See P7-5. |
+
+Also found and left open rather than fixed in this pass (flagged in the relevant item's notes above,
+not silent gaps): P5-5's "N imported / M need review" summary and tappable needs-review list, P5-6
+(hardcoded colors / deprecated APIs / accessibility) and P5-7 (error-message cleanup) haven't started,
+Settings' biometric toggle only persists a flag with no screen actually calling
+`authenticateWithBiometric()` during unlock, and Settings' Export Data / privacy-policy / licence
+entries are still stubs.
+
+---
+
 ## Suggested execution order
 
 | Round | Tasks | Why |
@@ -625,10 +929,10 @@ Two smaller findings from the same review pass were noted but left as-is (neithe
 | 2 | P7-1, P7-4 (test harness + lints) | Everything after this needs a safety net |
 | 3 ✅ | P1-1, P1-2, P1-4, P1-7, P0-6 | Security core |
 | 4 ✅ | P2-4/P2-5 (schema v5 + model hygiene), P2-1, P2-2, P2-3 | Accounting correctness on the new schema |
-| 5 | P3-1, P3-2, P3-3, P3-4, P3-5 | Parser accuracy, with fixtures from round 2 |
-| 6 | P4-1, P4-2 | Performance, once behaviour is pinned by tests |
-| 7 | P5-1, P5-2, P5-3, P5-4, P5-5, P5-6, P5-7, P1-3, P1-6 | UX + the honest privacy story |
-| 8 | P0-7, P6-*, P7-5 | Release engineering and the store submission |
+| 5 ✅ | P3-1, P3-2, P3-3, P3-4, P3-5 | Parser accuracy, with fixtures from round 2 |
+| 6 ✅ | P4-1, P4-2 | Performance, once behaviour is pinned by tests |
+| 7 ⚠️ | P5-1, P5-2, P5-3, P5-4, P5-5, P5-6, P5-7, P1-3, P1-6 | UX + the honest privacy story — P5-1/2/3/4 and P1-3/1-6 done (P5-3 export/privacy-policy links and P1-6 biometric-unlock wiring still open); P5-5 partial; P5-6/P5-7 not started |
+| 8 ⚠️ | P0-7, P6-*, P7-5 | Release engineering and the store submission — P0-7/P6-5/P6-6/P7-5 done; P6-1 partial (icon/splash open); P6-2/P6-3 not started; still needs a real keystore and the P1-5 decision below |
 
 **Decide P1-5 (SMS restricted permission) before round 8** — it can change the product, not just the
 code. Everything in rounds 1–7 is worth doing on either path.

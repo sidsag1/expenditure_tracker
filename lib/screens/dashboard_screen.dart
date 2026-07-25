@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/account.dart';
@@ -15,7 +17,7 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingObserver {
   final AccountDAO _accountDAO = AccountDAO();
   final TransactionDAO _transactionDAO = TransactionDAO();
   
@@ -27,28 +29,62 @@ class _DashboardScreenState extends State<DashboardScreen> {
   double _totalExpenses = 0.0;
   bool _isLoading = true;
   String _errorMessage = '';
+  DateTime? _lastSyncTime;
 
   @override
   void initState() {
     super.initState();
-    _loadDashboardData();
+    WidgetsBinding.instance.addObserver(this);
+    // Initial load will sync once, then subsequent builds won't
+    _syncAndLoadDashboardData();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _syncAndLoadDashboardData();
+    }
+  }
+
+  // Loads whatever is already on disk immediately, then kicks off the SMS
+  // sync in the background and only reloads if it actually found something
+  // new. The old order (await the sync, then load) left the user staring at
+  // a spinner for however long the sync took -- often several seconds --
+  // before they could see data that was already sitting in the local DB.
+  Future<void> _syncAndLoadDashboardData() async {
+    await _loadDashboardData();
+    unawaited(_syncInBackground());
+  }
+
+  Future<void> _syncInBackground() async {
+    try {
+      final synced = await SMSService().syncMessages();
+      if (!mounted) return;
+      if (synced > 0) {
+        await _loadDashboardData();
+      } else {
+        setState(() {
+          _lastSyncTime = SMSService().getLastSyncTime();
+        });
+      }
+    } catch (_) {
+      // Ignore sync errors; dashboard still shows existing data.
+    }
   }
 
   Future<void> _loadDashboardData() async {
     try {
+      if (!mounted) return;
       setState(() {
         _isLoading = true;
         _errorMessage = '';
       });
-
-      // Pull and parse bank SMS messages before loading dashboard data.
-      // First run processes the entire inbox; later runs only new messages.
-      // Failures here (e.g. permission revoked) shouldn't block the dashboard.
-      try {
-        await SMSService().syncMessages();
-      } catch (_) {
-        // Ignore sync errors; dashboard still shows existing data.
-      }
 
       // Load data in parallel
       final results = await Future.wait([
@@ -60,6 +96,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _transactionDAO.getTotalExpenses(startDate: DateTime.now().subtract(const Duration(days: 30))),
       ]);
 
+      if (!mounted) return;
       setState(() {
         _accounts = results[0] as List<Account>;
         _totalBalance = results[1] as double;
@@ -67,9 +104,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _recentTransactions = results[3] as List<Transaction>;
         _totalIncome = results[4] as double;
         _totalExpenses = results[5] as double;
+        _lastSyncTime = SMSService().getLastSyncTime();
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = 'Failed to load dashboard data: ${e.toString()}';
         _isLoading = false;
@@ -84,14 +123,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text(
-          'Dashboard',
-          style: TextStyle(color: Colors.white),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Dashboard',
+              style: TextStyle(color: Colors.white),
+            ),
+            if (_lastSyncTime != null)
+              Text(
+                'Last sync: ${DateFormat('MMM d, h:mm a').format(_lastSyncTime!)}',
+                style: TextStyle(color: Colors.grey[400], fontSize: 10),
+              )
+            else
+              Text(
+                'Never synced',
+                style: TextStyle(color: Colors.grey[400], fontSize: 10),
+              ),
+          ],
         ),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white),
-            onPressed: _loadDashboardData,
+            onPressed: _syncAndLoadDashboardData,
           ),
         ],
       ),
@@ -123,7 +177,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 16),
           ElevatedButton(
-            onPressed: _loadDashboardData,
+            onPressed: _syncAndLoadDashboardData,
             child: const Text('Retry'),
           ),
         ],
@@ -133,7 +187,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildDashboardContent() {
     return RefreshIndicator(
-      onRefresh: _loadDashboardData,
+      onRefresh: _syncAndLoadDashboardData,
       color: Colors.blue[400],
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(16),

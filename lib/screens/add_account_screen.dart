@@ -3,7 +3,8 @@ import '../models/account.dart';
 import '../database/account_dao.dart';
 
 class AddAccountScreen extends StatefulWidget {
-  const AddAccountScreen({super.key});
+  final Account? existingAccount;
+  const AddAccountScreen({super.key, this.existingAccount});
 
   @override
   State<AddAccountScreen> createState() => _AddAccountScreenState();
@@ -23,6 +24,21 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
 
   bool _isLoading = false;
   String _errorMessage = '';
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.existingAccount != null) {
+      final acc = widget.existingAccount!;
+      _selectedAccountType = acc.accountType;
+      _selectedBank = acc.bankName;
+      _accountNameController.text = acc.accountName;
+      _accountNumberController.text = acc.accountNumber;
+      _balanceController.text = acc.currentBalance.toString();
+      _debitCard1Controller.text = acc.debitCard1 ?? '';
+      _debitCard2Controller.text = acc.debitCard2 ?? '';
+    }
+  }
 
   bool get _isCreditCard => _selectedAccountType == 'credit_card';
   bool get _isBankAccount => _selectedAccountType == 'bank_account';
@@ -77,9 +93,9 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text(
-          'Add Account',
-          style: TextStyle(color: Colors.white),
+        title: Text(
+          widget.existingAccount != null ? 'Edit Account' : 'Add Account',
+          style: const TextStyle(color: Colors.white),
         ),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
@@ -446,13 +462,17 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
     try {
       // Check if account number already exists
       final accountNumber = _accountNumberController.text.trim();
-      if (accountNumber.isNotEmpty &&
-          await _accountDAO.accountNumberExists(accountNumber)) {
-        setState(() {
-          _errorMessage = 'An account with this number already exists';
-          _isLoading = false;
-        });
-        return;
+      final isEditing = widget.existingAccount != null;
+      if (accountNumber.isNotEmpty) {
+        if (!isEditing || widget.existingAccount?.accountNumber != accountNumber) {
+          if (await _accountDAO.accountNumberExists(accountNumber)) {
+            setState(() {
+              _errorMessage = 'An account with this number already exists';
+              _isLoading = false;
+            });
+            return;
+          }
+        }
       }
 
       final card1 = _debitCard1Controller.text.trim();
@@ -461,6 +481,7 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
       // Create new account
       final now = DateTime.now();
       final account = Account(
+        id: isEditing ? widget.existingAccount!.id : null,
         accountType: _selectedAccountType,
         bankName: _selectedBank,
         accountNumber: accountNumber,
@@ -468,17 +489,21 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
         currentBalance: double.parse(_balanceController.text),
         debitCard1: _isBankAccount && card1.isNotEmpty ? card1 : null,
         debitCard2: _isBankAccount && card2.isNotEmpty ? card2 : null,
-        createdAt: now,
+        createdAt: isEditing ? widget.existingAccount!.createdAt : now,
         updatedAt: now,
       );
 
       // Save to database
-      await _accountDAO.insertAccount(account);
+      if (isEditing) {
+        await _accountDAO.updateAccount(account);
+      } else {
+        await _accountDAO.insertAccount(account);
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Account added successfully!'),
+          SnackBar(
+            content: Text(isEditing ? 'Account updated successfully!' : 'Account added successfully!'),
             backgroundColor: Colors.green,
           ),
         );

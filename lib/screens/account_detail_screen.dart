@@ -3,6 +3,7 @@ import '../models/account.dart';
 import '../models/transaction.dart';
 import '../database/account_dao.dart';
 import '../database/transaction_dao.dart';
+import 'add_account_screen.dart';
 import 'add_transaction_screen.dart';
 import 'transactions_screen.dart';
 import '../utils/formatters.dart';
@@ -37,25 +38,28 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
 
   Future<void> _loadData() async {
     try {
+      if (!mounted) return;
       setState(() {
         _isLoading = true;
         _errorMessage = '';
       });
 
-      // Load transactions for this account
-      final transactions = await _transactionDAO.getTransactionsByAccount(widget.account.id!);
-      
+      // Load transactions for this account (limit to 10 for display)
+      final transactions = await _transactionDAO.getTransactionsByAccount(widget.account.id!, limit: 10);
+
       // Calculate totals
       final expenses = await _transactionDAO.getTotalExpenses(accountId: widget.account.id);
       final income = await _transactionDAO.getTotalIncome(accountId: widget.account.id);
 
+      if (!mounted) return;
       setState(() {
-        _transactions = transactions.take(10).toList(); // Show only recent 10
+        _transactions = transactions;
         _totalExpenses = expenses;
         _totalIncome = income;
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = 'Failed to load account details: ${e.toString()}';
         _isLoading = false;
@@ -77,7 +81,7 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.edit, color: Colors.white),
-            onPressed: _showEditDialog,
+            onPressed: _navigateToEditAccount,
           ),
           IconButton(
             icon: const Icon(Icons.delete, color: Colors.red),
@@ -528,27 +532,20 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
     }
   }
 
-  void _showEditDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1a1a2e),
-        title: const Text(
-          'Edit Account',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: const Text(
-          'Account editing functionality will be implemented in future updates.',
-          style: TextStyle(color: Colors.grey),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('OK', style: TextStyle(color: Colors.blue)),
-          ),
-        ],
+  Future<void> _navigateToEditAccount() async {
+    final updated = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AddAccountScreen(existingAccount: widget.account),
       ),
     );
+    // AddAccountScreen edits `widget.account`'s underlying row but this
+    // screen's fields all read from the widget's own (now-stale) copy, so
+    // rather than partially refreshing in place, pop back to the account
+    // list -- which already reloads on `true`, same as the delete flow.
+    if (updated == true && mounted) {
+      Navigator.pop(context, true);
+    }
   }
 
   void _showDeleteDialog() {

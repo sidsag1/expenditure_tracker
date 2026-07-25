@@ -20,11 +20,21 @@ class PinSetupScreen extends StatefulWidget {
 class _PinSetupScreenState extends State<PinSetupScreen> {
   final AuthService _authService = AuthService();
   
+  String _oldPin = '';
+  bool _isAuthenticating = false;
   String _currentPin = '';
   String _confirmPin = '';
   bool _isConfirming = false;
   bool _isLoading = false;
   String _errorMessage = '';
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.isFirstTime) {
+      _isAuthenticating = true;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -52,7 +62,9 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
               ),
               const SizedBox(height: 12),
               Text(
-                _isConfirming ? 'Confirm Your PIN' : 'Create Security PIN',
+                _isAuthenticating
+                    ? 'Enter Current PIN'
+                    : (_isConfirming ? 'Confirm Your PIN' : 'Create Security PIN'),
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 22,
@@ -61,9 +73,11 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                _isConfirming
-                    ? 'Enter the same PIN again to confirm'
-                    : 'Choose a ${AppConstants.pinLength}-digit PIN to secure your financial data',
+                _isAuthenticating
+                    ? 'Please enter your current PIN to continue'
+                    : (_isConfirming
+                        ? 'Enter the same PIN again to confirm'
+                        : 'Choose a ${AppConstants.pinLength}-digit PIN to secure your financial data'),
                 style: TextStyle(
                   color: Colors.grey[400],
                   fontSize: 14,
@@ -77,7 +91,9 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(AppConstants.pinLength, (index) {
-                  final indexToShow = _isConfirming ? _confirmPin.length : _currentPin.length;
+                  final indexToShow = _isAuthenticating
+                      ? _oldPin.length
+                      : (_isConfirming ? _confirmPin.length : _currentPin.length);
                   final isFilled = index < indexToShow;
 
                   return Container(
@@ -185,7 +201,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
               ),
 
               // Help text
-              if (_isConfirming)
+              if (_isConfirming && !_isAuthenticating)
                 TextButton(
                   onPressed: () {
                     setState(() {
@@ -250,7 +266,13 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
       _errorMessage = '';
     });
     
-    if (!_isConfirming) {
+    if (_isAuthenticating) {
+      if (_oldPin.length < AppConstants.pinLength) {
+        setState(() {
+          _oldPin += number;
+        });
+      }
+    } else if (!_isConfirming) {
       if (_currentPin.length < AppConstants.pinLength) {
         setState(() {
           _currentPin += number;
@@ -265,8 +287,9 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
     }
 
     // Auto-advance when PIN is complete
-    if ((!_isConfirming && _currentPin.length == AppConstants.pinLength) ||
-        (_isConfirming && _confirmPin.length == AppConstants.pinLength)) {
+    if ((_isAuthenticating && _oldPin.length == AppConstants.pinLength) ||
+        (!_isAuthenticating && !_isConfirming && _currentPin.length == AppConstants.pinLength) ||
+        (!_isAuthenticating && _isConfirming && _confirmPin.length == AppConstants.pinLength)) {
       Future.delayed(const Duration(milliseconds: 300), () {
         if (!mounted) return;
         _onSubmit();
@@ -281,7 +304,13 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
       _errorMessage = '';
     });
     
-    if (!_isConfirming) {
+    if (_isAuthenticating) {
+      if (_oldPin.isNotEmpty) {
+        setState(() {
+          _oldPin = _oldPin.substring(0, _oldPin.length - 1);
+        });
+      }
+    } else if (!_isConfirming) {
       if (_currentPin.isNotEmpty) {
         setState(() {
           _currentPin = _currentPin.substring(0, _currentPin.length - 1);
@@ -299,6 +328,33 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
   Future<void> _onSubmit() async {
     if (_isLoading) return;
     
+    if (_isAuthenticating) {
+      if (_oldPin.length != AppConstants.pinLength) {
+        setState(() {
+          _errorMessage = 'PIN must be exactly ${AppConstants.pinLength} digits';
+        });
+        return;
+      }
+      
+      setState(() => _isLoading = true);
+      final isValid = await _authService.verifyPin(_oldPin);
+      if (mounted) {
+        setState(() => _isLoading = false);
+        if (isValid) {
+          setState(() {
+            _isAuthenticating = false;
+            _errorMessage = '';
+          });
+        } else {
+          setState(() {
+            _errorMessage = 'Incorrect PIN. Please try again.';
+            _oldPin = '';
+          });
+        }
+      }
+      return;
+    }
+
     final currentPin = _isConfirming ? _confirmPin : _currentPin;
 
     if (!AuthService.validatePinStrength(currentPin)) {
