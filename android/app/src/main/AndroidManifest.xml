@@ -1,25 +1,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    
-    <!-- SMS Permissions -->
+
+    <!-- The app only ever reads the inbox (MainActivity.readInbox via
+         ContentResolver query on Telephony.Sms.Inbox) — no SMS is ever
+         sent or listened for via a broadcast receiver, and there is no
+         network or external-storage code anywhere in the app. Declaring
+         those permissions anyway is Play-hostile on a finance app and
+         gets flagged in review for no functional benefit. -->
     <uses-permission android:name="android.permission.READ_SMS" />
-    <uses-permission android:name="android.permission.RECEIVE_SMS" />
-    <uses-permission android:name="android.permission.SEND_SMS" />
-    
-    <!-- Internet and Network Permissions -->
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    
-    <!-- Storage Permissions -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-    
-    <!-- Phone State Permissions -->
-    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
-    
+
     <application
         android:label="expenditure_tracker"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules">
         <activity
             android:name=".MainActivity"
             android:exported="true"

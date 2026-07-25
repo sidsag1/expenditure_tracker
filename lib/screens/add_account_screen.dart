@@ -224,9 +224,9 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.1),
+                    color: Colors.red.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.red.withOpacity(0.3)),
+                    border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
                   ),
                   child: Row(
                     children: [
@@ -351,13 +351,13 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
         return GestureDetector(
           onTap: () {
             setState(() {
-              _selectedAccountType = type['value'];
+              _selectedAccountType = type['value'] as String;
             });
           },
           child: Container(
             decoration: BoxDecoration(
               color: isSelected
-                ? Colors.blue[400]!.withOpacity(0.2)
+                ? Colors.blue[400]!.withValues(alpha: 0.2)
                 : const Color(0xFF1a1a2e),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
@@ -376,7 +376,7 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  type['label'],
+                  type['label'] as String,
                   style: TextStyle(
                     color: isSelected ? Colors.blue[400] : Colors.grey[300],
                     fontWeight: FontWeight.w500,
@@ -398,7 +398,7 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
         border: Border.all(color: Colors.grey[700]!),
       ),
       child: DropdownButtonFormField<String>(
-        value: _selectedBank.isEmpty ? null : _selectedBank,
+        initialValue: _selectedBank.isEmpty ? null : _selectedBank,
         decoration: const InputDecoration(
           hintText: 'Select bank or wallet',
           prefixIcon: Icon(Icons.account_balance, color: Colors.grey),

@@ -120,7 +120,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
           _loadAccounts();
         }
       },
-      selectedColor: Colors.blue[400]!.withOpacity(0.3),
+      selectedColor: Colors.blue[400]!.withValues(alpha: 0.3),
       checkmarkColor: Colors.blue[400],
       labelStyle: TextStyle(
         color: isSelected ? Colors.blue[400] : Colors.grey[400],
@@ -307,7 +307,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
     }
 
     return CircleAvatar(
-      backgroundColor: color.withOpacity(0.2),
+      backgroundColor: color.withValues(alpha: 0.2),
       child: Icon(icon, color: color),
     );
   }

@@ -25,6 +25,11 @@ void main() {
           accountType: 'debit_card',
           isManual: false,
           isPending: false,
+          balanceAfter: 297158.22,
+          isTransfer: true,
+          needsReview: true,
+          source: 'sms',
+          rawMessageHash: 'abc123',
           createdAt: now,
           updatedAt: now,
         );
@@ -47,14 +52,46 @@ void main() {
       expect(restored.accountType, original.accountType);
       expect(restored.isManual, original.isManual);
       expect(restored.isPending, original.isPending);
+      expect(restored.balanceAfter, original.balanceAfter);
+      expect(restored.isTransfer, original.isTransfer);
+      expect(restored.needsReview, original.needsReview);
+      expect(restored.source, original.source);
+      expect(restored.rawMessageHash, original.rawMessageHash);
       expect(restored.createdAt, original.createdAt);
       expect(restored.updatedAt, original.updatedAt);
     });
 
-    test('fromMap defaults missing category to uncategorized', () {
+    test('fromMap defaults missing source to manual and balanceAfter to null',
+        () {
+      final map = buildTransaction().toMap()
+        ..remove('source')
+        ..remove('balance_after');
+      final restored = Transaction.fromMap(map);
+      expect(restored.source, 'manual');
+      expect(restored.balanceAfter, isNull);
+    });
+
+    test('fromMap accepts an int-typed balance_after column', () {
+      final map = buildTransaction().toMap();
+      map['balance_after'] = 300000; // e.g. a stored 300000.0 comes back as int
+      final restored = Transaction.fromMap(map);
+      expect(restored.balanceAfter, 300000.0);
+      expect(restored.balanceAfter, isA<double>());
+    });
+
+    test('fromMap defaults missing category to Uncategorized', () {
       final map = buildTransaction().toMap()..remove('category');
       map['category'] = null;
-      expect(Transaction.fromMap(map).category, 'uncategorized');
+      expect(Transaction.fromMap(map).category, 'Uncategorized');
+    });
+
+    test('fromMap accepts an int-typed amount column (SQLite returns int for whole-number REALs)',
+        () {
+      final map = buildTransaction().toMap();
+      map['amount'] = 50; // e.g. a stored 50.0 comes back as int, not double
+      final restored = Transaction.fromMap(map);
+      expect(restored.amount, 50.0);
+      expect(restored.amount, isA<double>());
     });
 
     test('copyWith overrides only the given fields', () {
@@ -96,10 +133,29 @@ void main() {
       expect(txn.copyWith(category: 'somethingelse').categoryIcon, '💰');
     });
 
-    test('equality is based on id', () {
+    test('equality compares every field, not just id', () {
       final a = buildTransaction();
-      final b = buildTransaction().copyWith(amount: 9999.0);
-      expect(a, equals(b));
+      final identical = buildTransaction();
+      final differentAmount = buildTransaction().copyWith(amount: 9999.0);
+
+      // Two unsaved (id == null) transactions with different content must
+      // not compare equal — this is what an account/category dropdown uses
+      // for item identity. copyWith can't null out id (id ?? this.id), so
+      // these are built directly.
+      Transaction unsaved(double amount) => Transaction(
+            transactionType: 'debit',
+            amount: amount,
+            description: 'unsaved',
+            transactionDate: now,
+            bankName: 'ICICI',
+            accountType: 'bank_account',
+            createdAt: now,
+            updatedAt: now,
+          );
+
+      expect(a, equals(identical));
+      expect(a, isNot(equals(differentAmount)));
+      expect(unsaved(10), isNot(equals(unsaved(20))));
     });
   });
 
@@ -129,6 +185,15 @@ void main() {
       expect(restored.isActive, original.isActive);
       expect(restored.createdAt, original.createdAt);
       expect(restored.updatedAt, original.updatedAt);
+    });
+
+    test('fromMap accepts an int-typed current_balance column (SQLite returns int for whole-number REALs)',
+        () {
+      final map = buildAccount().toMap();
+      map['current_balance'] = 25000; // e.g. a stored 25000.0 comes back as int
+      final restored = Account.fromMap(map);
+      expect(restored.currentBalance, 25000.0);
+      expect(restored.currentBalance, isA<double>());
     });
 
     test('toMap stores isActive as integer flag', () {
@@ -167,6 +232,30 @@ void main() {
         'Available Credit Limit',
       );
     });
+
+    test('equality compares every field, not just id', () {
+      final a = buildAccount();
+      final identical = buildAccount();
+      final differentBalance = buildAccount().copyWith(currentBalance: 1.0);
+
+      // Two unsaved (id == null) accounts with different content must not
+      // compare equal — this is what the Add Transaction screen's account
+      // dropdown uses for item identity. copyWith can't null out id
+      // (id ?? this.id), so these are built directly.
+      Account unsaved(String accountName) => Account(
+            accountType: 'bank_account',
+            bankName: 'SBI',
+            accountNumber: 'XX1234',
+            accountName: accountName,
+            currentBalance: 0,
+            createdAt: now,
+            updatedAt: now,
+          );
+
+      expect(a, equals(identical));
+      expect(a, isNot(equals(differentBalance)));
+      expect(unsaved('A'), isNot(equals(unsaved('B'))));
+    });
   });
 
   group('Category model', () {
@@ -201,6 +290,38 @@ void main() {
         categories.length,
         reason: 'category names should be unique',
       );
+    });
+
+    test('equality compares every field, not just id', () {
+      // Two unsaved (id == null) custom categories with different content
+      // must not compare equal.
+      final a = Category(
+        name: 'Aquarium Supplies',
+        icon: '🐠',
+        color: '#00BCD4',
+        isCustom: true,
+        createdAt: now,
+        updatedAt: now,
+      );
+      final b = Category(
+        name: 'Gardening',
+        icon: '🌱',
+        color: '#4CAF50',
+        isCustom: true,
+        createdAt: now,
+        updatedAt: now,
+      );
+      final identicalToA = Category(
+        name: 'Aquarium Supplies',
+        icon: '🐠',
+        color: '#00BCD4',
+        isCustom: true,
+        createdAt: now,
+        updatedAt: now,
+      );
+
+      expect(a, equals(identicalToA));
+      expect(a, isNot(equals(b)));
     });
   });
 }

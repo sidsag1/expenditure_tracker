@@ -131,6 +131,48 @@ Notes:
 flutter test
 ```
 
+#### Windows: one-time setup (required)
+
+The DAO and migration tests run against a real SQLite database via
+`sqflite_common_ffi`, which pulls in `sqlite3` — a package with a native-assets
+build hook. That hook runs as a pre-build step for **the whole test suite**, so
+if it fails, `flutter test` dies before a single test executes, including tests
+that never touch the database.
+
+It fails whenever the Flutter SDK lives under a path containing a space (e.g.
+`E:\External Software\Flutter\flutter`), with a message that looks like a
+corrupt SDK but isn't:
+
+```text
+'E:\External' is not recognized as an internal or external command,
+operable program or batch file.
+```
+
+The bug is in a precompiled snapshot shipped with the Dart SDK, so it can't be
+patched from this repo. Fix it once, permanently:
+
+```powershell
+.\scripts\setup-windows-flutter-sdk.ps1
+```
+
+This creates a directory junction at `C:\flutter_sdk` pointing at the real SDK
+and persists `PATH`/`FLUTTER_ROOT` at User scope, so every new terminal, VS Code
+window and CI runner on the machine picks it up — **there is no per-session step**.
+Open a new terminal afterwards. Re-running is a no-op; `-Revert` undoes the
+environment changes. If your SDK path has no space, the script detects that and
+exits without doing anything.
+
+#### Windows: `Flutter failed to delete file ...\sqlite3.dll`
+
+A `flutter_tester` process left over from an interrupted run keeps the native
+asset open, and the next run dies while cleaning `build\native_assets`. Kill it
+and retry:
+
+```powershell
+Get-Process flutter_tester -ErrorAction SilentlyContinue | Stop-Process -Force
+flutter test
+```
+
 ## ✅ Project Status: **COMPLETED** (100%)
 
 **All 10 phases have been successfully implemented!**

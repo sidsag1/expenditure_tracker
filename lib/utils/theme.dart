@@ -89,7 +89,7 @@ class AppTheme {
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           foregroundColor: AppColors.primaryColor,
-          side: BorderSide(color: AppColors.primaryColor),
+          side: const BorderSide(color: AppColors.primaryColor),
           padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
@@ -103,26 +103,26 @@ class AppTheme {
         fillColor: AppColors.surfaceColor,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: AppColors.borderColor),
+          borderSide: const BorderSide(color: AppColors.borderColor),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: AppColors.borderColor),
+          borderSide: const BorderSide(color: AppColors.borderColor),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: AppColors.primaryColor, width: 2),
+          borderSide: const BorderSide(color: AppColors.primaryColor, width: 2),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: AppColors.errorColor),
+          borderSide: const BorderSide(color: AppColors.errorColor),
         ),
         focusedErrorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: AppColors.errorColor, width: 2),
+          borderSide: const BorderSide(color: AppColors.errorColor, width: 2),
         ),
-        hintStyle: TextStyle(color: AppColors.textHintColor),
-        labelStyle: TextStyle(color: AppColors.textSecondaryColor),
+        hintStyle: const TextStyle(color: AppColors.textHintColor),
+        labelStyle: const TextStyle(color: AppColors.textSecondaryColor),
       ),
       
       // Floating Action Button Theme
@@ -222,7 +222,7 @@ class AppTheme {
       // Chip Theme
       chipTheme: ChipThemeData(
         backgroundColor: AppColors.surfaceColor,
-        selectedColor: AppColors.primaryColor.withOpacity(0.2),
+        selectedColor: AppColors.primaryColor.withValues(alpha: 0.2),
         labelStyle: const TextStyle(
           color: AppColors.textPrimaryColor,
         ),
@@ -235,14 +235,14 @@ class AppTheme {
       ),
       
       // Divider Theme
-      dividerTheme: DividerThemeData(
+      dividerTheme: const DividerThemeData(
         color: AppColors.dividerColor,
         thickness: 1,
         space: 1,
       ),
       
       // Bottom Navigation Bar Theme
-      bottomNavigationBarTheme: BottomNavigationBarThemeData(
+      bottomNavigationBarTheme: const BottomNavigationBarThemeData(
         backgroundColor: AppColors.surfaceColor,
         selectedItemColor: AppColors.primaryColor,
         unselectedItemColor: AppColors.textHintColor,

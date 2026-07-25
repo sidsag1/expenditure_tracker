@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pre-API-31 backup rules. Unused while allowBackup="false", kept so the
+     exclusion still applies if backup is ever re-enabled. -->
+<full-backup-content>
+    <exclude domain="sharedpref" />
+    <exclude domain="database" />
+</full-backup-content>

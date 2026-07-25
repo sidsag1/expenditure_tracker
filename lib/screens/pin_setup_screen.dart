@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import '../utils/app_logger.dart';
+import '../utils/constants.dart';
 
 class PinSetupScreen extends StatefulWidget {
   final bool isFirstTime;
@@ -61,7 +63,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
               Text(
                 _isConfirming
                     ? 'Enter the same PIN again to confirm'
-                    : 'Choose a 4-6 digit PIN to secure your financial data',
+                    : 'Choose a ${AppConstants.pinLength}-digit PIN to secure your financial data',
                 style: TextStyle(
                   color: Colors.grey[400],
                   fontSize: 14,
@@ -74,7 +76,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
               // PIN Display
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(6, (index) {
+                children: List.generate(AppConstants.pinLength, (index) {
                   final indexToShow = _isConfirming ? _confirmPin.length : _currentPin.length;
                   final isFilled = index < indexToShow;
 
@@ -100,9 +102,9 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.1),
+                    color: Colors.red.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.red.withOpacity(0.3)),
+                    border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
                   ),
                   child: Row(
                     children: [
@@ -249,23 +251,24 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
     });
     
     if (!_isConfirming) {
-      if (_currentPin.length < 6) {
+      if (_currentPin.length < AppConstants.pinLength) {
         setState(() {
           _currentPin += number;
         });
       }
     } else {
-      if (_confirmPin.length < 6) {
+      if (_confirmPin.length < AppConstants.pinLength) {
         setState(() {
           _confirmPin += number;
         });
       }
     }
-    
+
     // Auto-advance when PIN is complete
-    if ((!_isConfirming && _currentPin.length == 6) ||
-        (_isConfirming && _confirmPin.length == 6)) {
+    if ((!_isConfirming && _currentPin.length == AppConstants.pinLength) ||
+        (_isConfirming && _confirmPin.length == AppConstants.pinLength)) {
       Future.delayed(const Duration(milliseconds: 300), () {
+        if (!mounted) return;
         _onSubmit();
       });
     }
@@ -297,10 +300,10 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
     if (_isLoading) return;
     
     final currentPin = _isConfirming ? _confirmPin : _currentPin;
-    
-    if (currentPin.length < 4) {
+
+    if (!AuthService.validatePinStrength(currentPin)) {
       setState(() {
-        _errorMessage = 'PIN must be at least 4 digits';
+        _errorMessage = 'PIN must be exactly ${AppConstants.pinLength} digits';
       });
       return;
     }
@@ -348,19 +351,27 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
             
             widget.onComplete?.call();
           }
-        } else {
+        } else if (mounted) {
           setState(() {
             _errorMessage = 'Failed to save PIN. Please try again.';
           });
         }
-      } catch (e) {
-        setState(() {
-          _errorMessage = 'An error occurred. Please try again.';
-        });
+      } catch (e, st) {
+        // setPin runs PBKDF2 (~100k iterations), so this screen can be
+        // disposed — by onComplete's navigation, or a back press — while the
+        // await is still outstanding.
+        AppLogger.error('PIN setup failed', e, st);
+        if (mounted) {
+          setState(() {
+            _errorMessage = 'An error occurred. Please try again.';
+          });
+        }
       } finally {
-        setState(() {
-          _isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
       }
     }
   }

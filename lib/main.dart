@@ -3,12 +3,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models/transaction.dart';
 import 'models/account.dart';
-import 'models/category.dart';
 import 'database/database_helper.dart';
-import 'database/category_dao.dart';
 import 'services/auth_service.dart';
 import 'services/sms_service.dart';
-import 'utils/constants.dart';
 import 'utils/theme.dart';
 import 'screens/splash_screen.dart';
 import 'screens/onboarding_screen.dart';
@@ -26,14 +23,14 @@ import 'screens/reports_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Initialize database and services
+  // Initialize database and services. DatabaseHelper._createDatabase already
+  // seeds the predefined categories on first create; a second seed step here
+  // used to duplicate that (see Category.predefinedCategories for the single
+  // source of truth).
   await DatabaseHelper.instance.database;
   await AuthService().init();
   await SMSService().init();
-  
-  // Initialize categories
-  await _initializeCategories();
-  
+
   runApp(const ExpenditureTrackerApp());
 }
 
@@ -124,24 +121,5 @@ class ExpenditureTrackerApp extends StatelessWidget {
         }
       },
     );
-  }
-}
-
-Future<void> _initializeCategories() async {
-  final categoryDAO = CategoryDAO();
-  final existingCategories = await categoryDAO.getAllCategories();
-  
-  if (existingCategories.isEmpty) {
-    for (final categoryData in AppConstants.predefinedCategories) {
-      final category = Category(
-        name: categoryData['name'],
-        icon: categoryData['icon'],
-        color: categoryData['color'],
-        isCustom: false,
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-      );
-      await categoryDAO.insertCategory(category);
-    }
   }
 }

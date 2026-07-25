@@ -5,6 +5,7 @@ import '../models/category.dart';
 import '../database/transaction_dao.dart';
 import '../database/account_dao.dart';
 import '../database/category_dao.dart';
+import '../utils/app_logger.dart';
 
 class AddTransactionScreen extends StatefulWidget {
   final Transaction? transaction; // For editing existing transaction
@@ -32,9 +33,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   final _referenceController = TextEditingController();
   
   String _selectedTransactionType = 'debit';
-  String _selectedCategory = 'uncategorized';
+  String _selectedCategory = 'Uncategorized';
   Account? _selectedAccount;
   DateTime _selectedDate = DateTime.now();
+  bool _adjustBalance = false;
   
   List<Account> _accounts = [];
   List<Category> _categories = [];
@@ -56,11 +58,37 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     try {
       _accounts = await _accountDAO.getActiveAccounts();
       _categories = await _categoryDAO.getAllCategories();
-      
+
+      if (_isEditing && widget.transaction!.accountId != null) {
+        // Look up by id directly rather than scanning the active-only list —
+        // an account deactivated after this transaction was created must
+        // still be editable/re-saveable, not silently dropped to null.
+        final existingAccount =
+            await _accountDAO.getAccountById(widget.transaction!.accountId!);
+        if (existingAccount != null) {
+          _selectedAccount = existingAccount;
+          if (!_accounts.any((a) => a.id == existingAccount.id)) {
+            _accounts = [..._accounts, existingAccount];
+          }
+        }
+      }
+
+      // Guard against a category that no longer exists (stale data, a
+      // deleted custom category) — DropdownButtonFormField throws if its
+      // value doesn't match any item once the list is non-empty.
+      if (_categories.isNotEmpty &&
+          !_categories.any((c) => c.name == _selectedCategory)) {
+        _selectedCategory = _categories
+            .firstWhere(
+              (c) => c.name == 'Uncategorized',
+              orElse: () => _categories.first,
+            )
+            .name;
+      }
+
       setState(() {});
-    } catch (e) {
-      // Handle error
-      print('Error loading data: $e');
+    } catch (e, stackTrace) {
+      AppLogger.error('Error loading data', e, stackTrace);
     }
   }
 
@@ -117,7 +145,12 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               _buildSectionTitle('Account'),
               const SizedBox(height: 8),
               _buildAccountSelector(),
-              
+
+              if (!_isEditing && _selectedAccount != null) ...[
+                const SizedBox(height: 12),
+                _buildAdjustBalanceToggle(),
+              ],
+
               const SizedBox(height: 24),
               
               // Amount and Date
@@ -182,7 +215,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: _isLoading ? null : _saveTransaction,
+                  onPressed:
+                      _isLoading || _accounts.isEmpty ? null : _saveTransaction,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _selectedTransactionType == 'credit' 
                         ? Colors.green[400] 
@@ -229,65 +263,68 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     );
   }
 
-  Widget _buildTransactionTypeSelector() {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF1a1a2e),
+  // ListTile and RadioListTile paint their ink on the nearest Material
+  // ancestor. Inside a bare Container they assert on every build
+  // ("ListTile background color or ink splashes may be invisible"), taps show
+  // no ripple, and any widget test of this screen fails outright because the
+  // framework reports those asserts as unexpected exceptions. A Material with
+  // a shape renders identically to the old BoxDecoration and gives the tiles
+  // a real ink surface.
+  Widget _buildSurface({required Widget child, EdgeInsetsGeometry? padding}) {
+    return Material(
+      color: const Color(0xFF1a1a2e),
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[700]!),
+        side: BorderSide(color: Colors.grey[700]!),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: RadioListTile<String>(
-              title: const Text(
-                'Expense',
-                style: TextStyle(color: Colors.white),
+      clipBehavior: Clip.antiAlias,
+      child: padding == null ? child : Padding(padding: padding, child: child),
+    );
+  }
+
+  Widget _buildTransactionTypeSelector() {
+    return _buildSurface(
+      child: RadioGroup<String>(
+        groupValue: _selectedTransactionType,
+        onChanged: (value) {
+          if (value != null) {
+            setState(() {
+              _selectedTransactionType = value;
+            });
+          }
+        },
+        child: Row(
+          children: [
+            Expanded(
+              child: RadioListTile<String>(
+                title: const Text(
+                  'Expense',
+                  style: TextStyle(color: Colors.white),
+                ),
+                value: 'debit',
+                activeColor: Colors.red[400],
               ),
-              value: 'debit',
-              groupValue: _selectedTransactionType,
-              activeColor: Colors.red[400],
-              onChanged: (value) {
-                if (value != null) {
-                  setState(() {
-                    _selectedTransactionType = value;
-                  });
-                }
-              },
             ),
-          ),
-          Expanded(
-            child: RadioListTile<String>(
-              title: const Text(
-                'Income',
-                style: TextStyle(color: Colors.white),
+            Expanded(
+              child: RadioListTile<String>(
+                title: const Text(
+                  'Income',
+                  style: TextStyle(color: Colors.white),
+                ),
+                value: 'credit',
+                activeColor: Colors.green[400],
               ),
-              value: 'credit',
-              groupValue: _selectedTransactionType,
-              activeColor: Colors.green[400],
-              onChanged: (value) {
-                if (value != null) {
-                  setState(() {
-                    _selectedTransactionType = value;
-                  });
-                }
-              },
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildAccountSelector() {
     if (_accounts.isEmpty) {
-      return Container(
+      return _buildSurface(
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1a1a2e),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.grey[700]!),
-        ),
         child: Text(
           'No accounts found. Please add an account first.',
           style: TextStyle(color: Colors.grey[400]),
@@ -296,19 +333,21 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       );
     }
 
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF1a1a2e),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[700]!),
-      ),
+    return _buildSurface(
       child: DropdownButtonFormField<Account>(
         initialValue: _selectedAccount,
+        // Without this the button lays its selected item out in a
+        // shrink-wrapping Row, i.e. with unbounded width, and the Expanded in
+        // the item below throws "RenderFlex children have non-zero flex but
+        // incoming width constraints are unbounded" during layout.
+        isExpanded: true,
+        validator: (value) =>
+            value == null ? 'Please select an account' : null,
         decoration: const InputDecoration(
           border: InputBorder.none,
           contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         ),
-        hint: Text(
+        hint: const Text(
           'Select account',
           style: TextStyle(color: _grey600),
         ),
@@ -353,6 +392,33 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     );
   }
 
+  // Lets a manual entry move the account's stored balance by the transaction
+  // amount (debit subtracts, credit adds) instead of leaving it untouched.
+  // Only offered when adding (not editing) a transaction: applying it again
+  // on an edit would double-count without knowing whether the original entry
+  // already adjusted the balance.
+  Widget _buildAdjustBalanceToggle() {
+    return _buildSurface(
+      child: CheckboxListTile(
+        value: _adjustBalance,
+        onChanged: (value) =>
+            setState(() => _adjustBalance = value ?? false),
+        controlAffinity: ListTileControlAffinity.leading,
+        activeColor: Colors.blue[400],
+        title: const Text(
+          'Adjust account balance',
+          style: TextStyle(color: Colors.white),
+        ),
+        subtitle: Text(
+          _selectedTransactionType == 'debit'
+              ? 'Subtract this amount from the account balance'
+              : 'Add this amount to the account balance',
+          style: TextStyle(color: Colors.grey[400], fontSize: 12),
+        ),
+      ),
+    );
+  }
+
   Widget _buildAmountField() {
     return TextFormField(
       controller: _amountController,
@@ -360,7 +426,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         hintText: 'Enter amount',
-        hintStyle: TextStyle(color: _grey600),
+        hintStyle: const TextStyle(color: _grey600),
         prefixIcon: Icon(Icons.currency_rupee, color: Colors.grey[400]),
         filled: true,
         fillColor: const Color(0xFF1a1a2e),
@@ -390,12 +456,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   }
 
   Widget _buildDateField() {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF1a1a2e),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[700]!),
-      ),
+    return _buildSurface(
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16),
         title: Text(
@@ -418,7 +479,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         hintText: 'Enter description',
-        hintStyle: TextStyle(color: _grey600),
+        hintStyle: const TextStyle(color: _grey600),
         prefixIcon: Icon(Icons.description, color: Colors.grey[400]),
         filled: true,
         fillColor: const Color(0xFF1a1a2e),
@@ -450,7 +511,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         hintText: 'Enter merchant name',
-        hintStyle: TextStyle(color: _grey600),
+        hintStyle: const TextStyle(color: _grey600),
         prefixIcon: Icon(Icons.store, color: Colors.grey[400]),
         filled: true,
         fillColor: const Color(0xFF1a1a2e),
@@ -477,19 +538,15 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   }
 
   Widget _buildCategorySelector() {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF1a1a2e),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[700]!),
-      ),
+    return _buildSurface(
       child: DropdownButtonFormField<String>(
         initialValue: _selectedCategory,
+        isExpanded: true,
         decoration: const InputDecoration(
           border: InputBorder.none,
           contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         ),
-        hint: Text(
+        hint: const Text(
           'Select category',
           style: TextStyle(color: _grey600),
         ),
@@ -525,7 +582,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         hintText: 'Enter reference number (optional)',
-        hintStyle: TextStyle(color: _grey600),
+        hintStyle: const TextStyle(color: _grey600),
         prefixIcon: Icon(Icons.tag, color: Colors.grey[400]),
         filled: true,
         fillColor: const Color(0xFF1a1a2e),
@@ -610,10 +667,20 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         merchant: _selectedTransactionType == 'debit' ? _merchantController.text.trim() : null,
         transactionDate: _selectedDate,
         referenceNumber: _referenceController.text.trim().isEmpty ? null : _referenceController.text.trim(),
+        transactionId: _isEditing ? widget.transaction!.transactionId : null,
         category: _selectedCategory,
         bankName: _selectedAccount?.bankName ?? '',
         accountType: _selectedAccount?.accountType ?? '',
-        isManual: true,
+        isManual: _isEditing ? widget.transaction!.isManual : true,
+        isPending: _isEditing ? widget.transaction!.isPending : false,
+        // SMS-derived provenance must survive an edit rather than silently
+        // reset to the manual-entry defaults (Transaction()'s defaults are
+        // source: 'manual', isTransfer/needsReview: false).
+        balanceAfter: _isEditing ? widget.transaction!.balanceAfter : null,
+        isTransfer: _isEditing ? widget.transaction!.isTransfer : false,
+        needsReview: _isEditing ? widget.transaction!.needsReview : false,
+        source: _isEditing ? widget.transaction!.source : 'manual',
+        rawMessageHash: _isEditing ? widget.transaction!.rawMessageHash : null,
         createdAt: _isEditing ? widget.transaction!.createdAt : now,
         updatedAt: now,
       );
@@ -622,6 +689,15 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         await _transactionDAO.updateTransaction(transaction);
       } else {
         await _transactionDAO.insertTransaction(transaction);
+        if (_adjustBalance && _selectedAccount != null) {
+          final delta = _selectedTransactionType == 'debit'
+              ? -transaction.amount
+              : transaction.amount;
+          await _accountDAO.updateAccountBalance(
+            _selectedAccount!.id!,
+            _selectedAccount!.currentBalance + delta,
+          );
+        }
       }
 
       if (mounted) {

@@ -137,13 +137,17 @@ class Category {
   // Create Category object from Map
   factory Category.fromMap(Map<String, dynamic> map) {
     return Category(
-      id: map['id'],
-      name: map['name'],
-      icon: map['icon'],
-      color: map['color'],
+      id: map['id'] as int?,
+      name: map['name'] as String,
+      icon: map['icon'] as String,
+      color: map['color'] as String,
       isCustom: map['is_custom'] == 1,
-      createdAt: map['created_at'] != null ? DateTime.parse(map['created_at']) : null,
-      updatedAt: map['updated_at'] != null ? DateTime.parse(map['updated_at']) : null,
+      createdAt: map['created_at'] != null
+          ? DateTime.parse(map['created_at'] as String)
+          : null,
+      updatedAt: map['updated_at'] != null
+          ? DateTime.parse(map['updated_at'] as String)
+          : null,
     );
   }
 
@@ -173,12 +177,24 @@ class Category {
     return 'Category(id: $id, name: $name, icon: $icon, color: $color, isCustom: $isCustom)';
   }
 
+  // Compares every field rather than just `id`: two unsaved categories
+  // (id == null) would otherwise compare equal to each other regardless of
+  // their actual content (e.g. distinct custom categories a user is about to
+  // save).
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
-    return other is Category && other.id == id;
+    return other is Category &&
+        other.id == id &&
+        other.name == name &&
+        other.icon == icon &&
+        other.color == color &&
+        other.isCustom == isCustom &&
+        other.createdAt == createdAt &&
+        other.updatedAt == updatedAt;
   }
 
   @override
-  int get hashCode => id.hashCode;
+  int get hashCode =>
+      Object.hash(id, name, icon, color, isCustom, createdAt, updatedAt);
 }

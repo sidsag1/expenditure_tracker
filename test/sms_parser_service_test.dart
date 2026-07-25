@@ -120,6 +120,20 @@ void main() {
       expect(txn!.transactionType, 'credit');
       expect(txn.amount, 5000.00);
     });
+
+    test('numeric month in dd-mm-yy date is parsed correctly, not defaulted to January',
+        () async {
+      // Regression test for a bug where _parseMonth only recognized month
+      // *names* ('sep'), so a numeric month like '12' fell through to a
+      // silent January fallback.
+      final txn = await parser.parseSMS(
+        'Your a/c no. XXXXX1234 is credited by Rs.5,000.00 on 09-12-25 by transfer.',
+        'CBSSBI',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.transactionDate, DateTime(2025, 12, 9));
+    });
   });
 
   group('generic parser (other banks and wallets)', () {
@@ -288,7 +302,7 @@ void main() {
       );
 
       expect(txn, isNotNull);
-      expect(txn!.category, 'uncategorized');
+      expect(txn!.category, 'Uncategorized');
     });
   });
 
@@ -370,6 +384,34 @@ void main() {
     });
   });
 
+  group('unparseable dates', () {
+    test('unrecognized month token falls back to receivedAt instead of fabricating January',
+        () async {
+      final receivedAt = DateTime(2026, 3, 5, 10, 30);
+      final txn = await parser.parseSMS(
+        'ICICI Bank Acct XX123 debited for Rs 1,500.00 on 30-Xyz-25; UPI:12345.',
+        'VM-ICICIB',
+        receivedAt: receivedAt,
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.transactionDate, receivedAt);
+    });
+
+    test('far-future date (misparsed 2-digit year) falls back to receivedAt',
+        () async {
+      final receivedAt = DateTime(2026, 3, 5, 10, 30);
+      final txn = await parser.parseSMS(
+        'Rs. 250.00 debited from HDFC Bank A\\c XX9876 on 12/07/99 to VPA merchant@upi. Ref No: 987654321.',
+        'HDFCBK',
+        receivedAt: receivedAt,
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.transactionDate, receivedAt);
+    });
+  });
+
   group('amount parsing', () {
     test('handles Indian comma grouping', () async {
       final txn = await parser.parseSMS(
@@ -379,6 +421,145 @@ void main() {
 
       expect(txn, isNotNull);
       expect(txn!.amount, 123456.78);
+    });
+  });
+
+  group('balance/limit extraction (P2-1)', () {
+    test('ICICI account message: "Available Balance is Rs. X"', () async {
+      final txn = await parser.parseSMS(
+        'ICICI Bank Account XX340 credited:Rs. 2,45,687.00 on 30-Sep-25. Info NEFT-HSBCN52025093079143616-. Available Balance is Rs. 2,97,158.22.',
+        'ICICIB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.balanceAfter, 297158.22);
+    });
+
+    test('ICICI credit card message: "Avl Limit: INR X"', () async {
+      final txn = await parser.parseSMS(
+        'INR 630.00 spent using ICICI Bank Card XX4016 on 19-Oct-25 on INDIGO AIRLINE. Avl Limit: INR 1,45,739.72. If not you, call 1800 2662/SMS BLOCK 4016 to 9215676766.',
+        'ICICIB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.balanceAfter, 145739.72);
+    });
+
+    test('Kotak debit card message: "Avl bal Rs.X"', () async {
+      final txn = await parser.parseSMS(
+        'Rs.2000.00 spent via Kotak Debit Card XX7297 at PYU*SAFRESH TECHNOLOGY PR on 10/12/2025. Avl bal Rs.247.77 Not you?Tap https://kotak.com/KBANKT/Fraud',
+        'KOTAKB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.balanceAfter, 247.77);
+    });
+
+    test('HDFC message: "AVAILABLE LIMIT IS RS. X"', () async {
+      final txn = await parser.parseSMS(
+        'DEAR HDFCBANK CARDMEMBER, PAYMENT OF Rs. 29393.00 RECEIVED TOWARDS YOUR CREDIT CARD ENDING WITH 6955 ON 7-7-2026.YOUR AVAILABLE LIMIT IS RS. 686166.10',
+        'HDFCBK',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.balanceAfter, 686166.10);
+    });
+
+    test('SBI message: "Avl Bal INR X"', () async {
+      final txn = await parser.parseSMS(
+        'Dear Customer, Your a/c no. XXXXXXXX5706 is credited by Rs.100000.00 on 09-12-25 by a/c linked to mobile 8XXXXXX522-SIDDHARTH SAGAR BAR (IMPS Ref no 534320026033). Avl Bal INR 4,56,789.00. If not done by you, call 1800111109. -SBI',
+        'CBSSBI',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.balanceAfter, 456789.00);
+    });
+
+    test('a message with no balance/limit phrase leaves balanceAfter null',
+        () async {
+      final txn = await parser.parseSMS(
+        'ICICI Bank Acct XX123 debited for Rs 1,500.00 on 30-Sep-25; UPI:12345.',
+        'VM-ICICIB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.balanceAfter, isNull);
+    });
+  });
+
+  group('transfer detection (P2-2)', () {
+    test('ICICI credit card BBPS payment is flagged as a transfer', () async {
+      final txn = await parser.parseSMS(
+        'Payment of Rs 70,000.00 has been received on your ICICI Bank Credit Card XX4016 through Bharat Bill Payment System on 09-DEC-25.',
+        'ICICIB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.isTransfer, isTrue);
+    });
+
+    test('HDFC "received towards your credit card" is flagged as a transfer',
+        () async {
+      final txn = await parser.parseSMS(
+        'DEAR HDFCBANK CARDMEMBER, PAYMENT OF Rs. 29393.00 RECEIVED TOWARDS YOUR CREDIT CARD ENDING WITH 6955 ON 7-7-2026.YOUR AVAILABLE LIMIT IS RS. 686166.10',
+        'HDFCBK',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.isTransfer, isTrue);
+    });
+
+    test('HDFC "credited to your card" confirmation is flagged as a transfer',
+        () async {
+      final txn = await parser.parseSMS(
+        'HDFC Bank Cardmember, Online Payment of Rs.29393 vide Ref# 188704527D5ME9D was credited to your card ending 6955 On 07/JUL/2026_value Date 07/JUL/2026',
+        'HDFCBK',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.isTransfer, isTrue);
+    });
+
+    test('an ordinary merchant debit is never flagged as a transfer',
+        () async {
+      final txn = await parser.parseSMS(
+        'Rs.499.00 spent via Kotak Debit Card XX1234 at SWIGGY on 12-Jul-25. Not you? Call 18602662666.',
+        'KOTAKB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.isTransfer, isFalse);
+    });
+
+    test(
+        'a non-card BBPS utility bill payment is a genuine expense, not a '
+        'transfer, even though it mentions BBPS', () async {
+      // BBPS is also the rail banks use for ordinary bill payments
+      // (electricity, gas, DTH) debited straight from a bank account. A bare
+      // "bbps" substring match would wrongly exclude this from Total
+      // Expenses; it must only be treated as a transfer when it's
+      // specifically a payment received on a card.
+      final txn = await parser.parseSMS(
+        'ICICI Bank Acct XX340 debited for Rs 1,500.00 on 12-Jul-25; BSES RAJDHANI POWER BBPS credited. UPI:700000000001.',
+        'ICICIB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.isTransfer, isFalse);
+    });
+  });
+
+  group('provenance fields', () {
+    test('a parsed SMS transaction records source: sms', () async {
+      final txn = await parser.parseSMS(
+        'ICICI Bank Acct XX123 debited for Rs 1,500.00 on 30-Sep-25; UPI:12345.',
+        'VM-ICICIB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.source, 'sms');
+      expect(txn.rawMessageHash, isNotNull);
+      expect(txn.rawMessageHash, hasLength(64)); // sha256 hex digest
     });
   });
 }

@@ -45,17 +45,19 @@ class Account {
   // Create Account object from Map
   factory Account.fromMap(Map<String, dynamic> map) {
     return Account(
-      id: map['id'],
-      accountType: map['account_type'],
-      bankName: map['bank_name'],
-      accountNumber: map['account_number'],
-      accountName: map['account_name'],
-      currentBalance: map['current_balance'],
-      debitCard1: map['debit_card_1'],
-      debitCard2: map['debit_card_2'],
+      id: map['id'] as int?,
+      accountType: map['account_type'] as String,
+      bankName: map['bank_name'] as String,
+      accountNumber: map['account_number'] as String,
+      accountName: map['account_name'] as String,
+      // SQLite stores REAL columns as int when the value has no fractional
+      // part (e.g. 50.0 -> 50), so this must go through num, not double.
+      currentBalance: (map['current_balance'] as num).toDouble(),
+      debitCard1: map['debit_card_1'] as String?,
+      debitCard2: map['debit_card_2'] as String?,
       isActive: map['is_active'] == 1,
-      createdAt: DateTime.parse(map['created_at']),
-      updatedAt: DateTime.parse(map['updated_at']),
+      createdAt: DateTime.parse(map['created_at'] as String),
+      updatedAt: DateTime.parse(map['updated_at'] as String),
     );
   }
 
@@ -103,12 +105,39 @@ class Account {
     return 'Account(id: $id, accountType: $accountType, bankName: $bankName, accountNumber: $accountNumber, accountName: $accountName, currentBalance: $currentBalance, isActive: $isActive)';
   }
 
+  // Compares every field rather than just `id`: two unsaved accounts
+  // (id == null) would otherwise compare equal to each other, which is what
+  // the account dropdown on the Add Transaction screen uses for item
+  // identity.
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
-    return other is Account && other.id == id;
+    return other is Account &&
+        other.id == id &&
+        other.accountType == accountType &&
+        other.bankName == bankName &&
+        other.accountNumber == accountNumber &&
+        other.accountName == accountName &&
+        other.currentBalance == currentBalance &&
+        other.debitCard1 == debitCard1 &&
+        other.debitCard2 == debitCard2 &&
+        other.isActive == isActive &&
+        other.createdAt == createdAt &&
+        other.updatedAt == updatedAt;
   }
 
   @override
-  int get hashCode => id.hashCode;
+  int get hashCode => Object.hash(
+        id,
+        accountType,
+        bankName,
+        accountNumber,
+        accountName,
+        currentBalance,
+        debitCard1,
+        debitCard2,
+        isActive,
+        createdAt,
+        updatedAt,
+      );
 }

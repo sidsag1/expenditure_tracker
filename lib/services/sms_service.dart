@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../database/transaction_dao.dart';
 import 'sms_parser_service.dart';
 
 class SMSService {
@@ -11,10 +10,6 @@ class SMSService {
   SMSService._internal();
 
   static const String _lastSyncTimeKey = 'expenditure_tracker_last_sms_sync';
-
-  // Bump the suffix whenever parser fixes require discarding previously
-  // imported transactions and re-importing the inbox from scratch.
-  static const String _reimportFlagKey = 'expenditure_tracker_reimport_v4';
 
   // Native channel for reading the device SMS inbox (see MainActivity.kt)
   static const MethodChannel _channel =
@@ -81,9 +76,9 @@ class SMSService {
     }
 
     try {
-      final List<dynamic> raw =
-          await _channel.invokeMethod('getInboxSms', {'since': since});
-      return raw
+      final raw = await _channel
+          .invokeMethod<List<dynamic>>('getInboxSms', {'since': since});
+      return (raw ?? const [])
           .map((m) => Map<String, dynamic>.from(m as Map))
           .toList();
     } on PlatformException catch (e) {
@@ -117,18 +112,13 @@ class SMSService {
       return 0;
     }
 
-    // One-time clean re-import: older builds saved promotional messages and
-    // wrong dates. Drop all auto-imported rows once; the full-inbox sync
-    // below re-imports everything through the current parser.
-    if (!(_prefs.getBool(_reimportFlagKey) ?? false)) {
-      await TransactionDAO().deleteAutoImportedTransactions();
-      await _prefs.setBool(_reimportFlagKey, true);
-    }
-
-    // Remove imports from older builds that saved transactions without
-    // checking for a registered account.
-    await TransactionDAO().deleteUnlinkedAutoTransactions();
-
+    // Older builds saved promotional messages, wrong dates, and transactions
+    // that were never matched to a registered account. Cleaning those up
+    // used to be a SharedPreferences-gated one-time hack that ran here on
+    // every sync; it's now a one-time DELETE in the schema v5 migration
+    // (DatabaseHelper._upgradeDatabase) instead, since a migration is
+    // inherently one-shot per install. The full-inbox rescan below re-imports
+    // anything real through the current parser regardless.
     final messages = await getBankSMSMessages();
     final parser = SMSParserService();
 

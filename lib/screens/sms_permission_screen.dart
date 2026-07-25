@@ -64,7 +64,7 @@ class _SMSPermissionScreenState extends State<SMSPermissionScreen> {
             Container(
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                color: Colors.blue[400]!.withOpacity(0.1),
+                color: Colors.blue[400]!.withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
               child: Icon(
@@ -111,9 +111,9 @@ class _SMSPermissionScreenState extends State<SMSPermissionScreen> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.1),
+                  color: Colors.red.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.red.withOpacity(0.3)),
+                  border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
                 ),
                 child: Row(
                   children: [
@@ -169,7 +169,7 @@ class _SMSPermissionScreenState extends State<SMSPermissionScreen> {
         Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: Colors.green[400]!.withOpacity(0.2),
+            color: Colors.green[400]!.withValues(alpha: 0.2),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(icon, color: Colors.green[400], size: 20),
@@ -208,9 +208,9 @@ class _SMSPermissionScreenState extends State<SMSPermissionScreen> {
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.green[400]!.withOpacity(0.1),
+              color: Colors.green[400]!.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.green[400]!.withOpacity(0.3)),
+              border: Border.all(color: Colors.green[400]!.withValues(alpha: 0.3)),
             ),
             child: Row(
               children: [

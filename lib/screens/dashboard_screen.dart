@@ -414,7 +414,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
+                const Text(
                   'Your Accounts',
                   style: TextStyle(
                     color: Colors.white,
@@ -491,6 +491,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     fontSize: 14,
                   ),
                 ),
+                Text(
+                  'as of ${_formatDate(account.updatedAt)}',
+                  style: TextStyle(color: Colors.grey[600], fontSize: 10),
+                ),
               ],
             ),
           ),
@@ -532,7 +536,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     return CircleAvatar(
-      backgroundColor: color.withOpacity(0.2),
+      backgroundColor: color.withValues(alpha: 0.2),
       child: Icon(icon, color: color, size: 20),
     );
   }
@@ -548,7 +552,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
+                const Text(
                   'Recent Transactions',
                   style: TextStyle(
                     color: Colors.white,
@@ -615,8 +619,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: [
           CircleAvatar(
             backgroundColor: transaction.isExpense 
-                ? Colors.red[400]!.withOpacity(0.2)
-                : Colors.green[400]!.withOpacity(0.2),
+                ? Colors.red[400]!.withValues(alpha: 0.2)
+                : Colors.green[400]!.withValues(alpha: 0.2),
             child: Icon(
               transaction.isExpense ? Icons.remove : Icons.add,
               color: transaction.isExpense ? Colors.red[400] : Colors.green[400],

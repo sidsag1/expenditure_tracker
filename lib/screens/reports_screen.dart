@@ -123,15 +123,17 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Widget _buildReportsContent() {
+    // Transfers (e.g. a credit-card bill payment) move money between the
+    // user's own accounts rather than earning or spending it, so they're
+    // excluded from both totals — while still appearing in the transaction
+    // lists below, same as the DAO aggregates used elsewhere.
     final totalIncome = _transactions
-        .where((t) => !t.isExpense)
+        .where((t) => !t.isExpense && !t.isTransfer)
         .fold(0.0, (sum, t) => sum + t.amount);
-    
+
     final totalExpenses = _transactions
-        .where((t) => t.isExpense)
+        .where((t) => t.isExpense && !t.isTransfer)
         .fold(0.0, (sum, t) => sum + t.amount);
-    
-    final netAmount = totalIncome - totalExpenses;
     
     final categoryTotals = _getCategoryTotals();
 
@@ -179,7 +181,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
+            const Text(
               'Time Period',
               style: TextStyle(
                 color: Colors.white,
@@ -293,7 +295,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
+            const Text(
               'Category Breakdown',
               style: TextStyle(
                 color: Colors.white,
@@ -314,7 +316,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   Widget _buildCategoryItem(String category, double amount) {
     final totalExpenses = _transactions
-        .where((t) => t.isExpense)
+        .where((t) => t.isExpense && !t.isTransfer)
         .fold(0.0, (sum, t) => sum + t.amount);
     
     final percentage = totalExpenses > 0 ? (amount / totalExpenses) * 100 : 0.0;
@@ -396,7 +398,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
+            const Text(
               'Recent Transactions',
               style: TextStyle(
                 color: Colors.white,
@@ -405,9 +407,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            Container(
+            SizedBox(
               height: 200,
-              child: _transactions.isEmpty 
+              child: _transactions.isEmpty
                   ? _buildEmptyState('No transactions for trends')
                   : ListView.builder(
                       itemCount: _transactions.length,
@@ -424,8 +426,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                             children: [
                               CircleAvatar(
                                 backgroundColor: transaction.isExpense 
-                                    ? Colors.red[400]!.withOpacity(0.2)
-                                    : Colors.green[400]!.withOpacity(0.2),
+                                    ? Colors.red[400]!.withValues(alpha: 0.2)
+                                    : Colors.green[400]!.withValues(alpha: 0.2),
                                 child: Icon(
                                   transaction.isExpense ? Icons.remove : Icons.add,
                                   color: transaction.isExpense ? Colors.red[400] : Colors.green[400],
@@ -487,7 +489,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
+            const Text(
               'Top Transactions',
               style: TextStyle(
                 color: Colors.white,
@@ -513,8 +515,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         children: [
           CircleAvatar(
             backgroundColor: transaction.isExpense 
-                ? Colors.red[400]!.withOpacity(0.2)
-                : Colors.green[400]!.withOpacity(0.2),
+                ? Colors.red[400]!.withValues(alpha: 0.2)
+                : Colors.green[400]!.withValues(alpha: 0.2),
             child: Icon(
               transaction.isExpense ? Icons.remove : Icons.add,
               color: transaction.isExpense ? Colors.red[400] : Colors.green[400],
@@ -588,8 +590,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final Map<String, double> categoryTotals = {};
     
     for (final transaction in _transactions) {
-      if (transaction.isExpense) {
-        categoryTotals[transaction.category] = 
+      if (transaction.isExpense && !transaction.isTransfer) {
+        categoryTotals[transaction.category] =
             (categoryTotals[transaction.category] ?? 0) + transaction.amount;
       }
     }

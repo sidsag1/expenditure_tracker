@@ -1,11 +1,12 @@
 import 'dart:convert';
-import 'dart:math';
-import 'package:intl/intl.dart';
+
+import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 import '../models/transaction.dart';
 import '../models/account.dart';
 import '../database/transaction_dao.dart';
 import '../database/account_dao.dart';
+import '../utils/app_logger.dart';
 
 class SMSParserService {
   static final SMSParserService _instance = SMSParserService._internal();
@@ -38,13 +39,13 @@ class SMSParserService {
       // Parse based on bank
       switch (bankName) {
         case 'ICICI':
-          transaction = _parseICICIMessage(message);
+          transaction = _parseICICIMessage(message, receivedAt);
           break;
         case 'Kotak':
-          transaction = _parseKotakMessage(message);
+          transaction = _parseKotakMessage(message, receivedAt);
           break;
         case 'SBI':
-          transaction = _parseSBIMessage(message);
+          transaction = _parseSBIMessage(message, receivedAt);
           break;
         default:
           // Try generic parsing
@@ -52,11 +53,16 @@ class SMSParserService {
       }
 
       if (transaction != null) {
-        // Set bank name and account type
+        // Set bank name, account type and the fields that don't depend on
+        // which bank-specific branch produced the transaction.
         transaction = transaction.copyWith(
           bankName: bankName,
           accountType: _determineAccountType(message, bankName),
           transactionId: _generateTransactionId(message, sender),
+          balanceAfter: _extractBalance(message),
+          isTransfer: _isTransferPattern(message),
+          source: 'sms',
+          rawMessageHash: _hashMessage(message),
         );
 
         // Auto-categorize expenses from the merchant named in the message
@@ -75,14 +81,14 @@ class SMSParserService {
       }
 
       return null;
-    } catch (e) {
-      print('Error parsing SMS: $e');
+    } catch (e, stackTrace) {
+      AppLogger.error('Error parsing SMS', e, stackTrace);
       return null;
     }
   }
 
   // Parse ICICI Bank messages
-  Transaction? _parseICICIMessage(String message) {
+  Transaction? _parseICICIMessage(String message, DateTime? receivedAt) {
     // ICICI Bank Account Credit/Debit
     RegExp accountRegex = RegExp(
       r'ICICI Bank (?:Account|Acct) ([A-Z]{2}\d+)\s+(credited|debited).*?Rs\.?[\s]*([\d,]+\.?\d*).*?on\s+(\d{1,2}-[A-Za-z]{3}-\d{2})',
@@ -112,10 +118,9 @@ class SMSParserService {
     // Try account message
     match = accountRegex.firstMatch(message);
     if (match != null) {
-      final accountNumber = match.group(1)!;
       final type = match.group(2)!.toLowerCase();
       final amount = _parseAmount(match.group(3)!);
-      final date = _parseDate(match.group(4)!);
+      final date = _parseDate(match.group(4)!) ?? receivedAt ?? DateTime.now();
 
       return Transaction(
         transactionType: type == 'credited' ? 'credit' : 'debit',
@@ -135,7 +140,7 @@ class SMSParserService {
     match = debitCardRegex.firstMatch(message);
     if (match != null) {
       final amount = _parseAmount(match.group(2)!);
-      final date = _parseDate(match.group(3)!);
+      final date = _parseDate(match.group(3)!) ?? receivedAt ?? DateTime.now();
       final merchant = match.group(4)!.trim();
 
       return Transaction(
@@ -156,7 +161,7 @@ class SMSParserService {
     match = creditCardRegex.firstMatch(message);
     if (match != null) {
       final amount = _parseAmount(match.group(1)!);
-      final date = _parseDate(match.group(3)!);
+      final date = _parseDate(match.group(3)!) ?? receivedAt ?? DateTime.now();
       final merchant = match.group(4)!.trim();
 
       return Transaction(
@@ -177,7 +182,7 @@ class SMSParserService {
     match = creditCardPaymentRegex.firstMatch(message);
     if (match != null) {
       final amount = _parseAmount(match.group(1)!);
-      final date = _parseDate(match.group(3)!);
+      final date = _parseDate(match.group(3)!) ?? receivedAt ?? DateTime.now();
 
       return Transaction(
         transactionType: 'credit',
@@ -196,7 +201,7 @@ class SMSParserService {
   }
 
   // Parse Kotak Bank messages
-  Transaction? _parseKotakMessage(String message) {
+  Transaction? _parseKotakMessage(String message, DateTime? receivedAt) {
     // Kotak Debit Card Transaction
     RegExp debitCardRegex = RegExp(
       r'Rs\.?([\d,]+\.?\d*)\s+spent\s+via Kotak Debit Card ([A-Z]{2}\d+).*?at\s+(.+?)(?:\.|\s+on)',
@@ -222,7 +227,7 @@ class SMSParserService {
     if (match != null) {
       final amount = _parseAmount(match.group(1)!);
       final merchant = match.group(3)!.trim();
-      final date = _extractDate(message) ?? DateTime.now();
+      final date = _extractDate(message) ?? receivedAt ?? DateTime.now();
 
       return Transaction(
         transactionType: 'debit',
@@ -244,7 +249,7 @@ class SMSParserService {
       final amount = _parseAmount(match.group(1)!);
       final isSent = message.toLowerCase().contains('sent');
       final recipient = match.group(3)!.trim();
-      final date = _extractDate(message) ?? DateTime.now();
+      final date = _extractDate(message) ?? receivedAt ?? DateTime.now();
 
       return Transaction(
         transactionType: isSent ? 'debit' : 'credit',
@@ -265,7 +270,7 @@ class SMSParserService {
     if (match != null) {
       final amount = _parseAmount(match.group(1)!);
       final isReceived = message.toLowerCase().contains('received');
-      final date = _extractDate(message) ?? DateTime.now();
+      final date = _extractDate(message) ?? receivedAt ?? DateTime.now();
 
       return Transaction(
         transactionType: isReceived ? 'credit' : 'debit',
@@ -284,7 +289,7 @@ class SMSParserService {
   }
 
   // Parse SBI Bank messages
-  Transaction? _parseSBIMessage(String message) {
+  Transaction? _parseSBIMessage(String message, DateTime? receivedAt) {
     // SBI IMPS Transfer
     RegExp impsRegex = RegExp(
       r'IMPS from Ac ([A-Z]\d+)\s+for Rs\.?\s*([\d,]+\.?\d*).*?Ref\s+(\d+).*?dt\s+(\d{1,2}\.\d{1,2}\.\d{2})',
@@ -309,7 +314,7 @@ class SMSParserService {
     match = impsRegex.firstMatch(message);
     if (match != null) {
       final amount = _parseAmount(match.group(2)!);
-      final date = _parseSBIDate(match.group(4)!);
+      final date = _parseSBIDate(match.group(4)!) ?? receivedAt ?? DateTime.now();
 
       return Transaction(
         transactionType: 'debit',
@@ -329,7 +334,7 @@ class SMSParserService {
     if (match != null) {
       final amount = _parseAmount(match.group(2)!);
       final merchant = match.group(4)!.trim();
-      final date = _parseSBIUpiDate(match.group(3)!);
+      final date = _parseSBIUpiDate(match.group(3)!) ?? receivedAt ?? DateTime.now();
 
       return Transaction(
         transactionType: 'debit',
@@ -349,7 +354,7 @@ class SMSParserService {
     match = creditRegex.firstMatch(message);
     if (match != null) {
       final amount = _parseAmount(match.group(2)!);
-      final date = _parseDate(match.group(3)!);
+      final date = _parseDate(match.group(3)!) ?? receivedAt ?? DateTime.now();
 
       return Transaction(
         transactionType: 'credit',
@@ -438,17 +443,52 @@ class SMSParserService {
         return false;
       }
 
-      final linked = transaction.copyWith(accountId: account.id);
+      var linked = transaction.copyWith(accountId: account.id);
 
-      // Banks often send two SMSes for the same event; keep only one.
-      if (await _transactionDAO.hasSimilarTransaction(linked)) {
+      // Banks often send two SMSes for the same event; keep only a confirmed
+      // duplicate off the books entirely. An ambiguous same-day/same-amount
+      // candidate is still imported (dropping it risks losing real money)
+      // but flagged so the user can resolve it later.
+      final duplicateMatch = await _transactionDAO.findDuplicateMatch(linked);
+      if (duplicateMatch == DuplicateMatch.confirmed) {
+        return false;
+      }
+      if (duplicateMatch == DuplicateMatch.ambiguous) {
+        linked = linked.copyWith(needsReview: true);
+      }
+
+      final insertedId = await _transactionDAO.insertOrIgnoreTransaction(linked);
+      if (insertedId == 0) {
+        // Lost a race against another sync inserting the same transaction_id.
         return false;
       }
 
-      await _transactionDAO.insertOrIgnoreTransaction(linked);
+      // Update the account's balance from the message, if it carried one and
+      // isn't older than what's already on record.
+      if (linked.balanceAfter != null) {
+        await _accountDAO.updateBalanceIfNewer(
+          account.id!,
+          linked.balanceAfter!,
+          linked.transactionDate,
+        );
+      }
+
+      // Look for the other leg of an internal transfer (e.g. a credit-card
+      // bill payment debited from a bank account and credited to the card)
+      // among the user's other registered accounts, and mark both rows so
+      // income/expense aggregates exclude them. Always attempted, even when
+      // this leg is already pattern-flagged: whichever leg saves *first* has
+      // no counterpart to find yet, so this is what retroactively marks it
+      // once the second leg (pattern-flagged or not) arrives.
+      final offset = await _transactionDAO
+          .findOffsettingTransaction(linked.copyWith(id: insertedId));
+      if (offset != null && offset.id != null) {
+        await _transactionDAO.markTransferPair(insertedId, offset.id!);
+      }
+
       return true;
-    } catch (e) {
-      print('Error saving transaction: $e');
+    } catch (e, stackTrace) {
+      AppLogger.error('Error saving transaction', e, stackTrace);
       return false;
     }
   }
@@ -749,7 +789,7 @@ class SMSParserService {
   String _generateTransactionId(String message, String sender) {
     // Create a unique ID based on message content and sender
     final content = message + sender;
-    return _uuid.v5(Uuid.NAMESPACE_URL, content);
+    return _uuid.v5(Namespace.url.value, content);
   }
 
   bool _isValidTransaction(Transaction transaction) {
@@ -767,111 +807,134 @@ class SMSParserService {
     return double.tryParse(cleanAmount) ?? 0.0;
   }
 
-  DateTime _parseDate(String dateStr) {
-    try {
-      // Handle formats like "30-Sep-25", "09-Dec-25", etc.
-      final parts = dateStr.split('-');
-      if (parts.length == 3) {
-        final day = int.parse(parts[0]);
-        final month = _parseMonth(parts[1]);
-        final year = int.parse('20${parts[2]}'); // Assuming 20xx
-        
-        return DateTime(year, month, day);
-      }
-    } catch (e) {
-      print('Error parsing date: $dateStr');
-    }
-    
-    return DateTime.now();
+  // Parses "dd-MMM-yy" (ICICI) or "dd-MM-yy" (SBI account credit) dates.
+  // Returns null on anything that doesn't resolve to a real calendar date so
+  // callers fall back to the SMS's received time instead of fabricating one.
+  DateTime? _parseDate(String dateStr) {
+    final parts = dateStr.split('-');
+    if (parts.length != 3) return null;
+    final day = int.tryParse(parts[0]);
+    final month = _parseMonth(parts[1]);
+    final year = _composeYear(parts[2]);
+    if (day == null || month == null || year == null) return null;
+    return _validDate(year, month, day);
   }
 
-  DateTime _parseSBIDate(String dateStr) {
-    try {
-      // Handle "01.12.25" format
-      final parts = dateStr.split('.');
-      if (parts.length == 3) {
-        final day = int.parse(parts[0]);
-        final month = int.parse(parts[1]);
-        final year = int.parse('20${parts[2]}');
-        return DateTime(year, month, day);
-      }
-    } catch (e) {
-      print('Error parsing SBI date: $dateStr');
-    }
-    return DateTime.now();
+  // Handles SBI's "01.12.25" format.
+  DateTime? _parseSBIDate(String dateStr) {
+    final parts = dateStr.split('.');
+    if (parts.length != 3) return null;
+    final day = int.tryParse(parts[0]);
+    final month = int.tryParse(parts[1]);
+    final year = _composeYear(parts[2]);
+    if (day == null || month == null || year == null) return null;
+    return _validDate(year, month, day);
   }
 
-  DateTime _parseSBIUpiDate(String dateStr) {
-    try {
-      // Handle "30Sep24" format
-      final regex = RegExp(r'(\d{1,2})([A-Za-z]{3})(\d{2})');
-      final match = regex.firstMatch(dateStr);
-      if (match != null) {
-        final day = int.parse(match.group(1)!);
-        final month = _parseMonth(match.group(2)!);
-        final year = int.parse('20${match.group(3)!}');
-        return DateTime(year, month, day);
-      }
-    } catch (e) {
-      print('Error parsing SBI UPI date: $dateStr');
-    }
-    return DateTime.now();
+  // Handles SBI UPI's "30Sep24" format.
+  DateTime? _parseSBIUpiDate(String dateStr) {
+    final match = RegExp(r'(\d{1,2})([A-Za-z]{3})(\d{2})').firstMatch(dateStr);
+    if (match == null) return null;
+    final day = int.tryParse(match.group(1)!);
+    final month = _parseMonth(match.group(2)!);
+    final year = _composeYear(match.group(3)!);
+    if (day == null || month == null || year == null) return null;
+    return _validDate(year, month, day);
   }
 
-  // Returns null when the message body carries no recognizable date
+  // Returns null when the message body carries no recognizable date. A date
+  // immediately following a marker keyword (on/dt/dated/date) is preferred
+  // over the first digit-triplet found anywhere in the message, so a
+  // reference or phone number elsewhere in the text isn't mistaken for one.
   DateTime? _extractDate(String message) {
+    final markerMatch = RegExp(
+      r'\b(?:on|dt|dated|date)\b[:\s]+(\S+)',
+      caseSensitive: false,
+    ).firstMatch(message);
+    if (markerMatch != null) {
+      final fromMarker = _extractDateFromText(markerMatch.group(1)!);
+      if (fromMarker != null) return fromMarker;
+    }
+    return _extractDateFromText(message);
+  }
+
+  DateTime? _extractDateFromText(String text) {
     // ISO order first: 2026-06-13 (also seen in HDFC card alerts)
-    final isoMatch = RegExp(r'(\d{4})-(\d{2})-(\d{2})').firstMatch(message);
+    final isoMatch =
+        RegExp(r'(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)').firstMatch(text);
     if (isoMatch != null) {
-      try {
-        return DateTime(
-          int.parse(isoMatch.group(1)!),
-          int.parse(isoMatch.group(2)!),
-          int.parse(isoMatch.group(3)!),
-        );
-      } catch (_) {}
+      final date = _validDate(
+        int.parse(isoMatch.group(1)!),
+        int.parse(isoMatch.group(2)!),
+        int.parse(isoMatch.group(3)!),
+      );
+      if (date != null) return date;
     }
 
-    // Day-first patterns
+    // Day-first patterns. Boundary guards keep these from matching inside a
+    // longer digit run (e.g. a reference or phone number).
     final patterns = [
-      RegExp(r'(\d{1,2})-([A-Za-z]{3})-(\d{2,4})'), // 30-Sep-25
-      RegExp(r'(\d{1,2})/([A-Za-z]{3})/(\d{2,4})'), // 07/JUL/2026
-      RegExp(r'(\d{1,2})/(\d{1,2})/(\d{2,4})'),     // 30/09/25 or 30/09/2025
-      RegExp(r'(\d{1,2})-(\d{1,2})-(\d{2,4})'),     // 7-7-2026 or 15-07-26
-      RegExp(r'(\d{1,2})\.(\d{1,2})\.(\d{2,4})'),   // 01.12.25
+      RegExp(r'(?<!\d)(\d{1,2})-([A-Za-z]{3})-(\d{2,4})(?!\d)'), // 30-Sep-25
+      RegExp(r'(?<!\d)(\d{1,2})/([A-Za-z]{3})/(\d{2,4})(?!\d)'), // 07/JUL/2026
+      RegExp(r'(?<!\d)(\d{1,2})/(\d{1,2})/(\d{2,4})(?!\d)'),     // 30/09/25
+      RegExp(r'(?<!\d)(\d{1,2})-(\d{1,2})-(\d{2,4})(?!\d)'),     // 15-07-26
+      RegExp(r'(?<!\d)(\d{1,2})\.(\d{1,2})\.(\d{2,4})(?!\d)'),   // 01.12.25
     ];
 
     for (final pattern in patterns) {
-      final match = pattern.firstMatch(message);
-      if (match != null) {
-        try {
-          final groups = match.groups([1, 2, 3]);
-          if (groups[0] != null && groups[1] != null && groups[2] != null) {
-            final day = int.parse(groups[0]!);
-            int month;
-            if (int.tryParse(groups[1]!) != null) {
-              month = int.parse(groups[1]!);
-            } else {
-              month = _parseMonth(groups[1]!);
-            }
-            int year = int.parse(groups[2]!);
-            if (year < 100) year += 2000;
-            return DateTime(year, month, day);
-          }
-        } catch (e) {
-          continue;
-        }
-      }
+      final match = pattern.firstMatch(text);
+      if (match == null) continue;
+      final groups = match.groups([1, 2, 3]);
+      final day = int.tryParse(groups[0]!);
+      final month = int.tryParse(groups[1]!) ?? _parseMonth(groups[1]!);
+      final year = _composeYear(groups[2]!);
+      if (day == null || month == null || year == null) continue;
+      final date = _validDate(year, month, day);
+      if (date != null) return date;
     }
     return null;
   }
 
-  int _parseMonth(String monthStr) {
-    final months = {
+  // Builds a calendar date, rejecting out-of-range components and the silent
+  // month/day rollover DateTime() would otherwise perform (e.g. day 32).
+  // Also rejects dates more than a day in the future — bank SMSes never
+  // describe transactions that haven't happened yet, so a "future" date here
+  // means the parse latched onto the wrong digits (e.g. a 2-digit year read
+  // as 2099) — callers fall back to receivedAt instead.
+  DateTime? _validDate(int year, int month, int day) {
+    if (year < 2000 || year > 2100) return null;
+    if (month < 1 || month > 12) return null;
+    if (day < 1 || day > 31) return null;
+    final date = DateTime(year, month, day);
+    if (date.year != year || date.month != month || date.day != day) {
+      return null;
+    }
+    if (date.isAfter(DateTime.now().add(const Duration(days: 1)))) {
+      return null;
+    }
+    return date;
+  }
+
+  // Two-digit years from bank SMSes are always 20xx.
+  int? _composeYear(String yearStr) {
+    final value = int.tryParse(yearStr);
+    if (value == null) return null;
+    return value < 100 ? 2000 + value : value;
+  }
+
+  // Returns the 1-12 month number for a name ('sep') or numeric ('09')
+  // token, or null when it's neither — e.g. a bad/unknown abbreviation must
+  // not silently resolve to January.
+  int? _parseMonth(String monthStr) {
+    const months = {
       'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
       'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
     };
-    return months[monthStr.toLowerCase()] ?? 1;
+    final named = months[monthStr.toLowerCase()];
+    if (named != null) return named;
+    final numeric = int.tryParse(monthStr);
+    if (numeric != null && numeric >= 1 && numeric <= 12) return numeric;
+    return null;
   }
 
   String? _extractMerchant(String message) {
@@ -911,4 +974,63 @@ class SMSParserService {
     }
     return null;
   }
+
+  // Pulls the trailing account balance / available credit limit out of a
+  // message body ("Avl bal Rs.247.77", "Available Balance is Rs. 2,97,158.22",
+  // "Avl Limit: INR 1,45,739.72", "YOUR AVAILABLE LIMIT IS RS. 686166.10").
+  // Bank-agnostic: applied to every parsed transaction regardless of which
+  // bank-specific branch produced it.
+  double? _extractBalance(String message) {
+    final patterns = [
+      RegExp(r'Avl\.?\s*[Bb]al(?:ance)?\.?\s*(?:Rs\.?|INR)\s*([\d,]+\.?\d*)',
+          caseSensitive: false),
+      RegExp(r'Available\s+Balance\s+is\s+(?:Rs\.?|INR)\s*([\d,]+\.?\d*)',
+          caseSensitive: false),
+      RegExp(r'Avl\.?\s*Limit\s*:?\s*(?:Rs\.?|INR)\s*([\d,]+\.?\d*)',
+          caseSensitive: false),
+      RegExp(r'Available\s+Limit\s+is\s+(?:Rs\.?|INR)\s*([\d,]+\.?\d*)',
+          caseSensitive: false),
+    ];
+    for (final pattern in patterns) {
+      final match = pattern.firstMatch(message);
+      if (match != null) {
+        return _parseAmount(match.group(1)!);
+      }
+    }
+    return null;
+  }
+
+  // True for messages describing an internal movement of the user's own
+  // money rather than genuine income/spending: a credit-card bill payment
+  // (debited from a bank account, credited to the card), including one paid
+  // through BBPS. Matched on the raw message text since these notifications
+  // carry no reference number or merchant to cross-reference against.
+  bool _isTransferPattern(String message) {
+    final lower = message.toLowerCase();
+    const explicitMarkers = [
+      'credit card payment received',
+      'payment received towards your card',
+      'received towards your credit card',
+      'credited to your card',
+    ];
+    if (explicitMarkers.any(lower.contains)) return true;
+
+    // BBPS is also the rail banks use for ordinary third-party bill payments
+    // (electricity, gas, DTH) debited straight from a bank account — a
+    // genuine expense, not an internal transfer. A bare 'bbps'/'bharat bill
+    // payment system' substring match can't tell the two apart, so only
+    // treat it as a transfer when the message is specifically a payment
+    // *received* on a *card* (the credit-card-bill-payment pattern above,
+    // phrased slightly differently) rather than any BBPS-mentioning message.
+    final mentionsBbps = lower.contains('bharat bill payment system') ||
+        lower.contains('bbps');
+    final isCardPaymentReceived =
+        lower.contains('card') && lower.contains('received');
+    return mentionsBbps && isCardPaymentReceived;
+  }
+
+  // SHA-256 of the raw SMS body, kept on the transaction row for provenance
+  // (e.g. tracing a row back to the exact message that produced it).
+  String _hashMessage(String message) =>
+      sha256.convert(utf8.encode(message)).toString();
 }

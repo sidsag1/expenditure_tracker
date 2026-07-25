@@ -111,6 +111,39 @@ class AccountDAO {
     );
   }
 
+  // Sets the balance from a parsed SMS, but only if [asOf] (the SMS's
+  // transaction date) is not older than the balance currently on record.
+  // `accounts.updated_at` doubles as "balance as of <date>" once the balance
+  // is being driven by SMS parsing rather than direct user edits, so a
+  // historical inbox message processed out of order (the OS inbox cursor
+  // isn't guaranteed chronological, and the whole inbox is rescanned on every
+  // sync) can't clobber a fresher balance with a stale one. Returns whether
+  // the update was applied.
+  Future<bool> updateBalanceIfNewer(
+    int accountId,
+    double balance,
+    DateTime asOf,
+  ) async {
+    final db = await _dbHelper.database;
+    final rows =
+        await db.query('accounts', where: 'id = ?', whereArgs: [accountId]);
+    if (rows.isEmpty) return false;
+
+    final current = Account.fromMap(rows.first);
+    if (asOf.isBefore(current.updatedAt)) return false;
+
+    await db.update(
+      'accounts',
+      {
+        'current_balance': balance,
+        'updated_at': asOf.toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [accountId],
+    );
+    return true;
+  }
+
   // Delete account (soft delete - set is_active to false)
   Future<int> deleteAccount(int accountId) async {
     final db = await _dbHelper.database;

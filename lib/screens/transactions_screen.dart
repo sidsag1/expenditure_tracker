@@ -231,7 +231,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                       onChanged: (value) {
                         if (value != null) {
                           setState(() {
-                            _selectedCategory = value!;
+                            _selectedCategory = value;
                           });
                           _loadTransactions();
                         }
@@ -268,7 +268,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                       onChanged: (value) {
                         if (value != null) {
                           setState(() {
-                            _selectedDateRange = value!;
+                            _selectedDateRange = value;
                           });
                           _loadTransactions();
                         }
@@ -368,8 +368,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         contentPadding: const EdgeInsets.all(16),
         leading: CircleAvatar(
           backgroundColor: transaction.isExpense 
-            ? Colors.red[400]!.withOpacity(0.2)
-            : Colors.green[400]!.withOpacity(0.2),
+            ? Colors.red[400]!.withValues(alpha: 0.2)
+            : Colors.green[400]!.withValues(alpha: 0.2),
           child: Icon(
             transaction.isExpense ? Icons.remove : Icons.add,
             color: transaction.isExpense ? Colors.red[400] : Colors.green[400],
@@ -422,8 +422,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   child: Row(
                     children: [
                       Icon(Icons.edit, color: Colors.grey[400], size: 16),
-                      SizedBox(width: 8),
-                      Text('Edit'),
+                      const SizedBox(width: 8),
+                      const Text('Edit'),
                     ],
                   ),
                 ),
@@ -432,8 +432,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   child: Row(
                     children: [
                       Icon(Icons.delete, color: Colors.red[400], size: 16),
-                      SizedBox(width: 8),
-                      Text('Delete'),
+                      const SizedBox(width: 8),
+                      const Text('Delete'),
                     ],
                   ),
                 ),
@@ -497,7 +497,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   void _deleteTransaction(Transaction transaction) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         backgroundColor: const Color(0xFF1a1a2e),
         title: const Text(
           'Delete Transaction',
@@ -509,12 +509,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () => Navigator.of(dialogContext).pop(),
             child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
           ),
           TextButton(
             onPressed: () async {
-              Navigator.of(context).pop();
+              Navigator.of(dialogContext).pop();
               try {
                 await _transactionDAO.deleteTransaction(transaction.id!);
                 if (mounted) {

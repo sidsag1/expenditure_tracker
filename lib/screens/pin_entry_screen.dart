@@ -1,6 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/services.dart' show SystemNavigator;
 import '../services/auth_service.dart';
+import '../services/app_reset_service.dart';
+import '../utils/app_logger.dart';
+import '../utils/constants.dart';
 
 class PinEntryScreen extends StatefulWidget {
   final VoidCallback? onSuccess;
@@ -22,11 +27,72 @@ class PinEntryScreen extends StatefulWidget {
 
 class _PinEntryScreenState extends State<PinEntryScreen> {
   final AuthService _authService = AuthService();
-  
+
   String _enteredPin = '';
   bool _isLoading = false;
+  bool _isResetting = false;
   String _errorMessage = '';
-  int _attemptsLeft = 5;
+  int _attemptsRemaining = AppConstants.maxAttempts;
+  Duration _lockRemaining = Duration.zero;
+  Timer? _lockTimer;
+
+  bool get _isLocked => _lockRemaining > Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshLockState();
+  }
+
+  @override
+  void dispose() {
+    _lockTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshLockState() async {
+    final remaining = await _authService.getLockRemaining();
+    final attemptsRemaining = await _authService.getAttemptsRemaining();
+    if (!mounted) return;
+    setState(() {
+      _lockRemaining = remaining;
+      _attemptsRemaining = attemptsRemaining;
+    });
+
+    _lockTimer?.cancel();
+    if (remaining > Duration.zero) {
+      _lockTimer = Timer.periodic(const Duration(seconds: 1), (_) => _tickLock());
+    }
+  }
+
+  Future<void> _tickLock() async {
+    final remaining = await _authService.getLockRemaining();
+    if (!mounted) return;
+
+    if (remaining <= Duration.zero) {
+      _lockTimer?.cancel();
+      final attemptsRemaining = await _authService.getAttemptsRemaining();
+      if (!mounted) return;
+      setState(() {
+        _lockRemaining = Duration.zero;
+        _attemptsRemaining = attemptsRemaining;
+        _errorMessage = '';
+      });
+    } else {
+      setState(() {
+        _lockRemaining = remaining;
+      });
+    }
+  }
+
+  String _formatLockRemaining(Duration d) {
+    final minutes = d.inMinutes;
+    final seconds = d.inSeconds % 60;
+    if (minutes > 0) {
+      return '$minutes:${seconds.toString().padLeft(2, '0')}';
+    }
+    return '${seconds}s';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,7 +107,9 @@ class _PinEntryScreenState extends State<PinEntryScreen> {
               Icon(
                 Icons.lock,
                 size: 48,
-                color: _errorMessage.isNotEmpty ? Colors.red[400] : Colors.blue[400],
+                color: _errorMessage.isNotEmpty || _isLocked
+                    ? Colors.red[400]
+                    : Colors.blue[400],
               ),
               const SizedBox(height: 12),
               Text(
@@ -67,7 +135,7 @@ class _PinEntryScreenState extends State<PinEntryScreen> {
               // PIN Display
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(6, (index) {
+                children: List.generate(AppConstants.pinLength, (index) {
                   final isFilled = index < _enteredPin.length;
 
                   return Container(
@@ -90,36 +158,54 @@ class _PinEntryScreenState extends State<PinEntryScreen> {
 
               const SizedBox(height: 12),
 
-              // Attempts left
-              if (_attemptsLeft < 5)
+              // Lockout countdown
+              if (_isLocked)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: _attemptsLeft <= 2 ? Colors.red.withOpacity(0.1) : Colors.orange.withOpacity(0.1),
+                    color: Colors.red.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                  ),
+                  child: Text(
+                    'Locked. Try again in ${_formatLockRemaining(_lockRemaining)}',
+                    style: TextStyle(
+                      color: Colors.red[400],
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                )
+              // Attempts left
+              else if (_attemptsRemaining < AppConstants.maxAttempts)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _attemptsRemaining <= 2 ? Colors.red.withValues(alpha: 0.1) : Colors.orange.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
-                      color: _attemptsLeft <= 2 ? Colors.red.withOpacity(0.3) : Colors.orange.withOpacity(0.3),
+                      color: _attemptsRemaining <= 2 ? Colors.red.withValues(alpha: 0.3) : Colors.orange.withValues(alpha: 0.3),
                     ),
                   ),
                   child: Text(
-                    '$_attemptsLeft attempts remaining',
+                    '$_attemptsRemaining attempts remaining',
                     style: TextStyle(
-                      color: _attemptsLeft <= 2 ? Colors.red[400] : Colors.orange[400],
+                      color: _attemptsRemaining <= 2 ? Colors.red[400] : Colors.orange[400],
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
-              
+
               // Error message
               if (_errorMessage.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.1),
+                    color: Colors.red.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.red.withOpacity(0.3)),
+                    border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
                   ),
                   child: Row(
                     children: [
@@ -199,6 +285,20 @@ class _PinEntryScreenState extends State<PinEntryScreen> {
                 ),
               ),
 
+              // Forgot PIN — always available, but resetting still requires
+              // an explicit confirmation dialog; it is not a bare-tap escape
+              // from a lockout.
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: TextButton(
+                  onPressed: _isResetting ? null : _showResetPinDialog,
+                  child: Text(
+                    'Forgot PIN?',
+                    style: TextStyle(color: Colors.blue[400]),
+                  ),
+                ),
+              ),
+
               // Cancel button
               if (widget.onCancel != null)
                 Padding(
@@ -224,11 +324,12 @@ class _PinEntryScreenState extends State<PinEntryScreen> {
     IconData? icon,
     required VoidCallback onTap,
   }) {
+    final disabled = _isLoading || _isLocked || _isResetting;
     return GestureDetector(
-      onTap: onTap,
+      onTap: disabled ? null : onTap,
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.grey[800],
+          color: disabled ? Colors.grey[850] : Colors.grey[800],
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: Colors.grey[700]!),
         ),
@@ -238,15 +339,15 @@ class _PinEntryScreenState extends State<PinEntryScreen> {
             child: text != null
                 ? Text(
                     text,
-                    style: const TextStyle(
-                      color: Colors.white,
+                    style: TextStyle(
+                      color: disabled ? Colors.grey[600] : Colors.white,
                       fontSize: 24,
                       fontWeight: FontWeight.w600,
                     ),
                   )
                 : Icon(
                     icon,
-                    color: Colors.blue[400],
+                    color: disabled ? Colors.grey[600] : Colors.blue[400],
                     size: 28,
                   ),
           ),
@@ -256,51 +357,49 @@ class _PinEntryScreenState extends State<PinEntryScreen> {
   }
 
   void _onNumberPress(String number) {
-    if (_isLoading || _enteredPin.length >= 6) return;
-    
+    if (_isLoading || _isLocked || _enteredPin.length >= AppConstants.pinLength) return;
+
     setState(() {
       _errorMessage = '';
     });
-    
+
     setState(() {
       _enteredPin += number;
     });
-    
+
     // Auto-verify when PIN is complete
-    if (_enteredPin.length == 6) {
+    if (_enteredPin.length == AppConstants.pinLength) {
       Future.delayed(const Duration(milliseconds: 300), () {
+        if (!mounted) return;
         _onSubmit();
       });
     }
   }
 
   void _onBackspace() {
-    if (_isLoading || _enteredPin.isEmpty) return;
-    
+    if (_isLoading || _isLocked || _enteredPin.isEmpty) return;
+
     setState(() {
       _errorMessage = '';
     });
-    
+
     setState(() {
       _enteredPin = _enteredPin.substring(0, _enteredPin.length - 1);
     });
   }
 
   Future<void> _onSubmit() async {
-    if (_isLoading || _enteredPin.length < 4) return;
-    
+    if (_isLoading || _isLocked || _enteredPin.length < AppConstants.pinLength) return;
+
     setState(() {
       _isLoading = true;
       _errorMessage = '';
     });
-    
+
     try {
       final isValid = await _authService.verifyPin(_enteredPin);
-      
+
       if (isValid) {
-        // Reset attempts on successful login
-        _attemptsLeft = 5;
-        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -308,74 +407,41 @@ class _PinEntryScreenState extends State<PinEntryScreen> {
               backgroundColor: Colors.green,
             ),
           );
-          
+
           widget.onSuccess?.call();
         }
       } else {
-        // Increment failed attempts
+        final locked = await _authService.isLockedOut();
+        final attemptsRemaining = await _authService.getAttemptsRemaining();
+
+        if (!mounted) return;
         setState(() {
-          _attemptsLeft--;
-          _errorMessage = 'Invalid PIN. Please try again.';
           _enteredPin = '';
+          _attemptsRemaining = attemptsRemaining;
+          _errorMessage = locked
+              ? 'Too many attempts. Try again later.'
+              : 'Invalid PIN. Please try again.';
         });
-        
-        if (_attemptsLeft <= 0) {
-          // Too many failed attempts - lock the app
-          _handleTooManyAttempts();
+
+        if (locked) {
+          await _refreshLockState();
         }
       }
-    } catch (e) {
+    } catch (e, st) {
+      // verifyPin now runs PBKDF2 (~100k iterations off-isolate), so the
+      // window in which this screen can be disposed mid-verify is real.
+      AppLogger.error('PIN entry failed', e, st);
+      if (!mounted) return;
       setState(() {
         _errorMessage = 'Authentication error. Please try again.';
       });
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
-  }
-
-  void _handleTooManyAttempts() {
-    // Show lockout dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1a1a2e),
-        title: const Text(
-          'Too Many Attempts',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: const Text(
-          'You have exceeded the maximum number of PIN attempts. '
-          'For security reasons, you need to reset your PIN.',
-          style: TextStyle(color: Colors.grey),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _showResetPinDialog();
-            },
-            child: Text(
-              'Reset PIN',
-              style: TextStyle(color: Colors.red[400]),
-            ),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              // Clear all data and restart
-              _clearAllData();
-            },
-            child: const Text(
-              'Clear Data',
-              style: TextStyle(color: Colors.red),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   void _showResetPinDialog() {
@@ -411,21 +477,28 @@ class _PinEntryScreenState extends State<PinEntryScreen> {
   }
 
   Future<void> _clearAllData() async {
+    setState(() {
+      _isResetting = true;
+    });
+
     try {
-      await _authService.clearAllAuthData();
-      
+      await AppResetService.resetAll();
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('App data cleared. Please restart the app.'),
+            content: Text('App data cleared. Closing app.'),
             backgroundColor: Colors.orange,
           ),
         );
-        
-        // Force app restart (in a real app, you might want to navigate to initial setup)
+        // Every in-memory cache (DB connections, AuthService/SharedPreferences
+        // state, other screens' loaded data) is now stale, so force a cold
+        // restart rather than trying to reset live app state in place.
+        await Future.delayed(const Duration(milliseconds: 800));
         SystemNavigator.pop();
       }
-    } catch (e) {
+    } catch (e, st) {
+      AppLogger.error('App reset failed', e, st);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -433,6 +506,12 @@ class _PinEntryScreenState extends State<PinEntryScreen> {
             backgroundColor: Colors.red,
           ),
         );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isResetting = false;
+        });
       }
     }
   }

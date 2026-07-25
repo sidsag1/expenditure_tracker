@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- API 31+: governs both cloud backup and device-to-device transfer.
+     allowBackup is already false, but device-transfer isn't gated by that
+     flag, so this is the only thing stopping the PIN/DB from following a
+     user to a new phone via the built-in transfer tool. -->
+<data-extraction-rules>
+    <cloud-backup disableIfNoEncryptionCapability="true">
+        <exclude domain="sharedpref" />
+        <exclude domain="database" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" />
+        <exclude domain="database" />
+    </device-transfer>
+</data-extraction-rules>

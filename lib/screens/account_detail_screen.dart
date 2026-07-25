@@ -239,12 +239,16 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
                     Text(
                       formatINR(widget.account.currentBalance),
                       style: TextStyle(
-                        color: widget.account.currentBalance >= 0 
-                          ? Colors.green[400] 
+                        color: widget.account.currentBalance >= 0
+                          ? Colors.green[400]
                           : Colors.red[400],
                         fontSize: 20,
                         fontWeight: FontWeight.w700,
                       ),
+                    ),
+                    Text(
+                      'as of ${_formatDate(widget.account.updatedAt)}',
+                      style: TextStyle(color: Colors.grey[500], fontSize: 10),
                     ),
                   ],
                 ),
@@ -407,8 +411,8 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
         onTap: () => _navigateToTransactionDetail(transaction),
         leading: CircleAvatar(
           backgroundColor: transaction.isExpense 
-            ? Colors.red[400]!.withOpacity(0.2)
-            : Colors.green[400]!.withOpacity(0.2),
+            ? Colors.red[400]!.withValues(alpha: 0.2)
+            : Colors.green[400]!.withValues(alpha: 0.2),
           child: Icon(
             transaction.isExpense ? Icons.remove : Icons.add,
             color: transaction.isExpense ? Colors.red[400] : Colors.green[400],
@@ -477,7 +481,7 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
     }
 
     return CircleAvatar(
-      backgroundColor: color.withOpacity(0.2),
+      backgroundColor: color.withValues(alpha: 0.2),
       child: Icon(icon, color: color),
     );
   }

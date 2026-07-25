@@ -22,7 +22,7 @@ class _SplashScreenState extends State<SplashScreen> {
     final hasSeenOnboarding = prefs.getBool('has_seen_onboarding') ?? false;
 
     // Check if PIN is set (AuthService owns the storage key)
-    final hasPin = AuthService().isPinSet;
+    final hasPin = await AuthService().isPinSet;
 
     await Future.delayed(const Duration(seconds: 2));
 
