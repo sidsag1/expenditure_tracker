@@ -2,7 +2,7 @@ name: expenditure_tracker
 description: "A Flutter app for tracking expenditure from various financial sources through SMS parsing."
 publish_to: 'none'
 
-version: 1.0.2+3
+version: 1.0.3+4
 
 environment:
   sdk: ^3.10.4

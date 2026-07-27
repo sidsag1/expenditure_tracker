@@ -38,7 +38,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 7,
+      version: 8,
       onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
       onCreate: _createDatabase,
       onUpgrade: _upgradeDatabase,
@@ -229,6 +229,26 @@ class DatabaseHelper {
       // v7: index for findOffsettingTransaction
       await db.execute(
           'CREATE INDEX idx_transactions_amount_type_date ON transactions (amount, transaction_type, transaction_date)');
+    }
+    if (oldVersion < 8) {
+      // v8: monthly credit-card statement notifications ("your statement has
+      // been sent to <email>", quoting the cycle's total amount due) were
+      // being imported as ordinary debits — one phantom expense per month,
+      // each roughly the sum of that month's purchases, which had already
+      // been imported individually from their own alerts. See
+      // SMSParserService._isStatementNotification for the parser-side fix.
+      //
+      // Same remedy as v5, and for the same reason: the offending rows can't
+      // be picked out reliably in SQL (their only tell is the message body,
+      // which isn't stored — only its hash), so drop every auto-imported row
+      // and let a full rescan reinsert through the corrected parser. Manual
+      // entries are untouched. SMSService._watermarkIsStale is what
+      // guarantees that next sync is a full one rather than an incremental
+      // one that would skip the whole back-catalogue.
+      await db.delete(
+        'transactions',
+        where: 'is_manual = 0',
+      );
     }
   }
 

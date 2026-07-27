@@ -482,10 +482,13 @@ class SMSParserService {
     return existingTransaction != null;
   }
 
-  // Save transaction to database. Only transactions that belong to an
-  // account the user has registered are saved; [sourceMessage] is the raw
-  // SMS body, used to match the account/card number in the message against
-  // the registered accounts.
+  // Save transaction to database. [sourceMessage] is the raw SMS body, used
+  // to match the account/card number named in the message against the
+  // registered accounts — always pass it, or nothing can be linked.
+  //
+  // Returns true only for a *newly imported* row. A message already on file
+  // returns false but is still re-linked if the account can now be resolved
+  // and wasn't before, which is what makes a rescan repair earlier imports.
   //
   // [activeAccounts], when passed, is used instead of re-querying the DB for
   // the active-accounts list -- a caller processing many messages in one
@@ -496,19 +499,30 @@ class SMSParserService {
       DatabaseExecutor? txn,
       List<Account>? activeAccounts}) async {
     try {
-      // Check for duplicates
-      if (await isDuplicateTransaction(transaction, txn: txn)) {
-        return false;
-      }
-
-      // Only keep transactions for a bank the user actually tracks. A match
-      // on a linked debit card lands on the bank account itself, so the
-      // transaction goes straight onto that account's statement; an
-      // ambiguous or unmatched account within a tracked bank is still
-      // imported (see _matchAccount) rather than dropped, just unassigned
-      // and flagged for the user to resolve.
+      // A match on a linked debit card lands on the bank account itself, so
+      // the transaction goes straight onto that account's statement; a
+      // message whose bank isn't registered, or whose account is ambiguous
+      // within a tracked bank, is still imported (see _matchAccount) rather
+      // than dropped, just unassigned and flagged for the user to resolve.
       final match = await _matchAccount(transaction, sourceMessage ?? '',
           txn: txn, activeAccounts: activeAccounts);
+
+      // Already imported? Re-linking, not re-inserting, is the point here.
+      // Messages read before the user had registered the account they belong
+      // to were stored unassigned, and their transaction_id (a hash of the
+      // message) never changes — so a rescan after adding the account would
+      // otherwise dedup against those rows and leave them orphaned forever,
+      // with no way in the app to ever attach them. Adopt them instead.
+      final existing = await _findExistingTransaction(transaction, txn: txn);
+      if (existing != null) {
+        if (existing.id != null &&
+            existing.accountId == null &&
+            match.account?.id != null) {
+          await _adoptUnassignedTransaction(existing, match.account!,
+              needsReview: match.needsReview, txn: txn);
+        }
+        return false;
+      }
 
       var linked = transaction.copyWith(
         accountId: match.account?.id,
@@ -548,24 +562,64 @@ class SMSParserService {
         );
       }
 
-      // Look for the other leg of an internal transfer (e.g. a credit-card
-      // bill payment debited from a bank account and credited to the card)
-      // among the user's other registered accounts, and mark both rows so
-      // income/expense aggregates exclude them. Always attempted, even when
-      // this leg is already pattern-flagged: whichever leg saves *first* has
-      // no counterpart to find yet, so this is what retroactively marks it
-      // once the second leg (pattern-flagged or not) arrives.
-      final offset = await _transactionDAO.findOffsettingTransaction(
-          linked.copyWith(id: insertedId),
-          txn: txn);
-      if (offset != null && offset.id != null) {
-        await _transactionDAO.markTransferPair(insertedId, offset.id!, txn: txn);
-      }
+      await _pairTransferLeg(linked.copyWith(id: insertedId), txn: txn);
 
       return true;
     } catch (e, stackTrace) {
       AppLogger.error('Error saving transaction', e, stackTrace);
       return false;
+    }
+  }
+
+  // The row already on file for this message, if any. Keyed on
+  // transaction_id, which is a hash of the message body plus sender, so the
+  // same SMS re-read by a later rescan always resolves to the same row.
+  Future<Transaction?> _findExistingTransaction(Transaction transaction,
+      {DatabaseExecutor? txn}) async {
+    if (transaction.transactionId == null) return null;
+    return _transactionDAO
+        .getTransactionByTransactionId(transaction.transactionId!, txn: txn);
+  }
+
+  // Attach a previously unassigned row to the account a rescan has now
+  // resolved for it, and give it the same follow-up treatment a fresh import
+  // gets: the balance the message carried is only useful once there's an
+  // account to put it on, and the row only becomes eligible to pair with the
+  // other leg of a transfer now that it sits on an account.
+  Future<void> _adoptUnassignedTransaction(
+      Transaction existing, Account account,
+      {required bool needsReview, DatabaseExecutor? txn}) async {
+    await _transactionDAO.linkTransactionToAccount(existing.id!, account.id!,
+        needsReview: needsReview, txn: txn);
+
+    final adopted =
+        existing.copyWith(accountId: account.id, needsReview: needsReview);
+
+    if (adopted.balanceAfter != null) {
+      await _accountDAO.updateBalanceIfNewer(
+        account.id!,
+        adopted.balanceAfter!,
+        adopted.transactionDate,
+        txn: txn,
+      );
+    }
+
+    await _pairTransferLeg(adopted, txn: txn);
+  }
+
+  // Look for the other leg of an internal transfer (e.g. a credit-card bill
+  // payment debited from a bank account and credited to the card) among the
+  // user's other registered accounts, and mark both rows so income/expense
+  // aggregates exclude them. Always attempted, even when this leg is already
+  // pattern-flagged: whichever leg lands *first* has no counterpart to find
+  // yet, so this is what retroactively marks it once the second leg
+  // (pattern-flagged or not) arrives.
+  Future<void> _pairTransferLeg(Transaction leg, {DatabaseExecutor? txn}) async {
+    if (leg.id == null) return;
+    final offset =
+        await _transactionDAO.findOffsettingTransaction(leg, txn: txn);
+    if (offset != null && offset.id != null) {
+      await _transactionDAO.markTransferPair(leg.id!, offset.id!, txn: txn);
     }
   }
 
@@ -593,11 +647,14 @@ class SMSParserService {
   // belongs to is unclear (multiple accounts at that bank and nothing in the
   // message to disambiguate, or a digit run that's too short/ambiguous to
   // trust) or was never resolved at all (digits present but none of them
-  // match a registered account/card). Both cases are imported and flagged
-  // rather than silently guessed at or dropped -- see saveTransaction.
-  // `(null, false)` means the bank itself isn't tracked (no account of that
-  // bank registered at all), which is a deliberate drop, not a matching
-  // failure.
+  // match a registered account/card). `(null, false)` means the bank itself
+  // isn't tracked -- no account of that bank registered at all, typically
+  // because the user hasn't added it *yet*.
+  //
+  // Every one of those cases is imported unassigned rather than guessed at
+  // or dropped: the money is real either way, and a later rescan re-runs
+  // this match and adopts the row once the account exists (see
+  // saveTransaction).
   Future<({Account? account, bool needsReview})> _matchAccount(
       Transaction transaction, String message,
       {DatabaseExecutor? txn, List<Account>? activeAccounts}) async {
@@ -610,11 +667,39 @@ class SMSParserService {
       return (account: null, needsReview: false);
     }
 
+    // Deliberately not filtered to runs the matcher below can act on: a run
+    // too short to bind ("Card 18") still means the message named an account,
+    // and the narrowing below must not then treat it as though it named none.
     final messageDigits = _extractAccountDigits(message);
     if (messageDigits.isEmpty) {
       if (bankAccounts.length == 1) {
         return (account: bankAccounts.first, needsReview: false);
       }
+
+      // Nothing in the message names a specific account, but the message
+      // itself says what *kind* of account it happened on (see
+      // _determineAccountType and the per-pattern accountType each parser
+      // branch sets). If exactly one registered account at this bank is of
+      // that kind, there is nothing left to guess at: a savings-account debit
+      // can only be the one savings account, whatever else the user holds at
+      // the same bank.
+      //
+      // This is what the digit-less back-catalogue depends on. Banks quote the
+      // card's last four on essentially every card alert, so a message that
+      // names no digits at all is overwhelmingly an account-level one; before
+      // this, a user with a savings account and two credit cards at one bank
+      // had every such message flagged for manual review forever.
+      //
+      // Still a narrowing, not a fallback: two accounts of the same kind at
+      // one bank stay ambiguous and land in review, because that is the case
+      // where guessing would misattribute real money.
+      final sameKind = bankAccounts
+          .where((a) => a.accountType == transaction.accountType)
+          .toList();
+      if (sameKind.length == 1) {
+        return (account: sameKind.first, needsReview: false);
+      }
+
       // Multiple accounts at this bank and nothing in the message names
       // which one -- guessing (the old behaviour) silently misattributes
       // real money to the wrong account's statement.
@@ -702,9 +787,10 @@ class SMSParserService {
   // + account/card token + a real date) is a genuine alert even though real
   // bank templates routinely also carry "Do not share your OTP/CVV" or a
   // "Know more" link -- so the broad marker list below must not veto it. Only
-  // a narrow, unambiguous denylist (an actual OTP delivery, or loan-ad
-  // phrasing that never means real money moved) can override a strong
-  // signature.
+  // the narrow, unambiguous denylist can override a strong signature: phrasing
+  // (an OTP delivery, a loan ad, a due-date reminder, an EMI-conversion offer)
+  // that never describes money having already moved, however transaction-shaped
+  // the rest of the message looks.
   bool _isNonTransactionalMessage(String message) {
     final lower = message.toLowerCase();
 
@@ -716,12 +802,33 @@ class SMSParserService {
       'unlock loan',
       'pre-approved',
       'pre approved',
+      // Instalment/bill reminders. These carry a full transaction signature
+      // by accident -- an amount, an account token, and a verb, because the
+      // body goes on to explain the money "will be debited" -- so the softer
+      // marker list below can't veto them and an EMI reminder would import
+      // as a real debit on its due date.
+      'is due on',
+      'payment is due',
+      'due date',
+      'amount due',
+      'maintain sufficient funds',
+      'maintain sufficient balance',
+      // "Convert your bill into EMIs" nudges hit the same problem from the
+      // other side: they quote the bill amount, name the card, and say
+      // "convert txns", and 'txn' is a transaction verb.
+      'can be paid in parts',
+      'convert txns into emi',
+      'convert txn into emi',
+      'convert to emi',
+      'check eligibility',
       'instant cash',
       'cash alert',
       'ready to be credited',
       'ready to be disbursed',
     ];
     if (hardVeto.any(lower.contains)) return true;
+
+    if (_isStatementNotification(lower)) return true;
 
     if (_hasStrongTransactionSignature(message)) return false;
 
@@ -736,20 +843,41 @@ class SMSParserService {
       'discount',
       'cashback offer',
       'congratulations',
-      'is due on',
       'due on',
       'do not share',
       'will be credited',
       'avail now',
-      // Credit card bill "convert to EMI" nudges quote the bill amount
-      // without any money having moved
-      'can be paid in parts',
-      'convert txns into emi',
-      'convert txn into emi',
-      'convert to emi',
-      'check eligibility',
     ];
     return markers.any(lower.contains);
+  }
+
+  // True for "your statement has been sent to <email>" style notifications.
+  // The figure they quote is the whole cycle's outstanding balance -- the sum
+  // of purchases already imported one by one from their own alerts -- so
+  // importing the summary as well double-counts the entire month. They reach
+  // here carrying a full transaction signature (amount, card token, and the
+  // verb 'sent' out of "has been sent to"), so only a hard veto stops them.
+  //
+  // Deliberately narrow, and a conjunction rather than either half alone.
+  // Card alerts routinely mention a statement in passing ("this will reflect
+  // in your next statement"), quote cycle totals alongside a real
+  // transaction, and say 'sent' about ordinary payments -- "Rs 500 sent to
+  // Ravi" is a UPI debit. Widening this to those phrasings swallowed every
+  // refund on the account: a refund alert names the same statement the
+  // purchase landed on, so the only thing that reliably separates a
+  // statement notification from a transaction is that it announces the
+  // statement being *delivered* somewhere.
+  //
+  // [lower] must already be lower-cased.
+  bool _isStatementNotification(String lower) {
+    if (!lower.contains('statement')) return false;
+    const deliveryMarkers = [
+      'sent to',
+      'has been sent',
+      'emailed',
+      'email id',
+    ];
+    return deliveryMarkers.any(lower.contains);
   }
 
   // Amount + a transaction verb + an account/card token + a resolvable date,

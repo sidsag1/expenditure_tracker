@@ -262,13 +262,15 @@ void main() {
   });
 
   group('findOffsettingTransaction / markTransferPair (P2-2)', () {
-    test('finds the opposite-direction, same-amount leg on another account',
-        () async {
+    test(
+        'finds the opposite-direction, same-amount leg on another account when '
+        'a credit card is involved — the bill-payment case', () async {
       final otherAccountId =
           await accountDAO.insertAccount(testAccount(bankName: 'HDFC'));
       final creditId = await transactionDAO.insertTransaction(testTransaction(
         accountId: otherAccountId,
         bankName: 'HDFC',
+        accountType: 'credit_card',
         type: 'credit',
         amount: 500,
         date: DateTime(2026, 3, 10),
@@ -285,6 +287,32 @@ void main() {
 
       expect(offset, isNotNull);
       expect(offset!.id, creditId);
+    });
+
+    test(
+        'two same-amount bank-to-bank movements with nothing corroborating '
+        'them are not paired — pairing them would erase both from the '
+        'income/expense totals', () async {
+      final otherAccountId =
+          await accountDAO.insertAccount(testAccount(bankName: 'HDFC'));
+      await transactionDAO.insertTransaction(testTransaction(
+        accountId: otherAccountId,
+        bankName: 'HDFC',
+        type: 'credit',
+        amount: 500,
+        date: DateTime(2026, 3, 10),
+      ));
+
+      final offset = await transactionDAO.findOffsettingTransaction(
+        testTransaction(
+          accountId: accountId,
+          type: 'debit',
+          amount: 500,
+          date: DateTime(2026, 3, 11),
+        ),
+      );
+
+      expect(offset, isNull);
     });
 
     test('does not match a same-account row', () async {
@@ -380,6 +408,146 @@ void main() {
 
       expect(await transactionDAO.getTotalExpenses(), 100.0);
       expect(await transactionDAO.getTotalIncome(), 200.0);
+      // The amount the two totals above leave out, which the account screen
+      // names so the user can reconcile a large visible credit against an
+      // income figure that didn't move.
+      expect(await transactionDAO.getTotalTransfers(), 1000.0);
+    });
+
+    test('getTotalTransfers is scoped by account and date range', () async {
+      final otherAccountId = await accountDAO.insertAccount(
+          testAccount(accountNumber: '9999', accountName: 'other'));
+      final now = DateTime.now();
+
+      await transactionDAO.insertTransaction(testTransaction(
+        accountId: accountId,
+        type: 'credit',
+        amount: 700,
+        isTransfer: true,
+        date: now,
+      ));
+      // Same account, outside a 30-day window.
+      await transactionDAO.insertTransaction(testTransaction(
+        accountId: accountId,
+        type: 'credit',
+        amount: 400,
+        isTransfer: true,
+        date: now.subtract(const Duration(days: 60)),
+      ));
+      // Different account entirely.
+      await transactionDAO.insertTransaction(testTransaction(
+        accountId: otherAccountId,
+        type: 'credit',
+        amount: 999,
+        isTransfer: true,
+        date: now,
+      ));
+
+      expect(
+        await transactionDAO.getTotalTransfers(accountId: accountId),
+        1100.0,
+      );
+      expect(
+        await transactionDAO.getTotalTransfers(
+          accountId: accountId,
+          startDate: now.subtract(const Duration(days: 30)),
+        ),
+        700.0,
+      );
+    });
+
+    test('hasAutoImportedTransactions distinguishes a purged table from a populated one',
+        () async {
+      // What SMSService uses to decide its stored sync high-water mark has
+      // gone stale: after a migration purges auto-imported rows, an
+      // incremental sync would skip the entire back-catalogue instead of
+      // rebuilding it.
+      expect(await transactionDAO.hasAutoImportedTransactions(), isFalse);
+
+      // A manual entry is not an import and must not make the mark look valid.
+      await transactionDAO.insertTransaction(testTransaction(
+        accountId: accountId,
+        isManual: true,
+      ));
+      expect(await transactionDAO.hasAutoImportedTransactions(), isFalse);
+
+      await transactionDAO.insertTransaction(testTransaction(
+        accountId: accountId,
+        isManual: false,
+      ));
+      expect(await transactionDAO.hasAutoImportedTransactions(), isTrue);
+    });
+
+    test('getTotalIncome counts transfers in when asked, and only then',
+        () async {
+      // A credit card's own summary folds the bill payments that clear it into
+      // Total Income -- they are the card's largest credits, and leaving them
+      // out describes almost nothing that happened on it. Every cross-account
+      // total must still leave them out, or the user's own cash paying a bill
+      // is counted a second time as household income.
+      await transactionDAO.insertTransaction(testTransaction(
+        accountId: accountId,
+        type: 'credit',
+        amount: 50000,
+        isTransfer: true,
+      ));
+      await transactionDAO.insertTransaction(testTransaction(
+        accountId: accountId,
+        type: 'credit',
+        amount: 644,
+      ));
+      // A transfer on the debit side must not be added to income by the flag.
+      await transactionDAO.insertTransaction(testTransaction(
+        accountId: accountId,
+        type: 'debit',
+        amount: 900,
+        isTransfer: true,
+      ));
+
+      expect(await transactionDAO.getTotalIncome(), 644.0);
+      expect(
+        await transactionDAO.getTotalIncome(includeTransfers: true),
+        50644.0,
+      );
+      // Expenses are unaffected either way.
+      expect(await transactionDAO.getTotalExpenses(), 0.0);
+    });
+
+    test('getTotalTransfers can name a single leg', () async {
+      // The account screen quotes this next to Total Income, so it has to
+      // cover the same rows that total does -- summing both directions would
+      // print a figure that doesn't reconcile with the one above it.
+      await transactionDAO.insertTransaction(testTransaction(
+        accountId: accountId,
+        type: 'credit',
+        amount: 50000,
+        isTransfer: true,
+      ));
+      await transactionDAO.insertTransaction(testTransaction(
+        accountId: accountId,
+        type: 'debit',
+        amount: 900,
+        isTransfer: true,
+      ));
+
+      expect(await transactionDAO.getTotalTransfers(), 50900.0);
+      expect(
+        await transactionDAO.getTotalTransfers(transactionType: 'credit'),
+        50000.0,
+      );
+      expect(
+        await transactionDAO.getTotalTransfers(transactionType: 'debit'),
+        900.0,
+      );
+    });
+
+    test('getTotalTransfers is zero when nothing is flagged', () async {
+      await transactionDAO.insertTransaction(testTransaction(
+        accountId: accountId,
+        type: 'credit',
+        amount: 300,
+      ));
+      expect(await transactionDAO.getTotalTransfers(), 0.0);
     });
 
     test('getSpendingByCategory/getSpendingByBank exclude transfer-flagged rows',

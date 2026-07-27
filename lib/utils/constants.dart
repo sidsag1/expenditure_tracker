@@ -11,7 +11,10 @@ class AppConstants {
   
   // Bank SMS sender numbers
   static const Map<String, List<String>> bankSenderNumbers = {
-    'ICICI': ['ICICIB', 'ICICIBK', 'ICICIL'],
+    // 'ICICIT' is the header ICICI actually sends transaction alerts under
+    // (VM-ICICIT / AD-ICICIT); without it every one of those messages was
+    // dropped at the sender check before any parsing happened.
+    'ICICI': ['ICICIB', 'ICICIBK', 'ICICIL', 'ICICIT'],
     'Kotak': ['KOTAKB', 'KOTAKL', 'KOTAKM'],
     'SBI': ['SBIPSG', 'SBIPSGB', 'SBI', 'SBIN'],
     'HDFC': ['HDFCB', 'HDFCL', 'HDFCBK'],

@@ -134,16 +134,21 @@ void main() {
     });
 
     test('a message for a bank the user has not registered any account for '
-        'is dropped, not imported unassigned', () async {
-      // No account registered at all -- unlike the ambiguous/unmatched
-      // cases above, there is no tracked bank to attach this to.
+        'is imported unassigned and flagged, so adding the account later can '
+        'claim it', () async {
+      // No account registered at all. Dropping the message would be
+      // unrecoverable -- the sync high-water mark means it is never offered
+      // again -- so it is kept for the account the user has yet to add.
       const message =
           'Rs.500.00 debited from your PNB Bank on 12-Jul-26 towards UPI payment to merchant.';
 
       final txn = await parser.parseSMS(message, 'PNB');
       expect(await parser.saveTransaction(txn!, sourceMessage: message),
-          isFalse);
-      expect(await transactionDAO.getTransactionCount(), 0);
+          isTrue);
+
+      final saved = (await transactionDAO.getAllTransactions()).single;
+      expect(saved.accountId, isNull);
+      expect(saved.needsReview, isTrue);
     });
 
     test('a confident 3+ digit suffix match still binds normally', () async {

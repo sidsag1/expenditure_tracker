@@ -118,6 +118,13 @@ class TransactionDAO {
   // direction, same amount, within [window] of this one — the fingerprint of
   // one leg of an internal transfer (e.g. a credit-card bill payment: a debit
   // on the bank account and a credit on the card for the same amount).
+  //
+  // That fingerprint alone is not enough to act on: two unrelated ₹500
+  // movements on two accounts in the same week share it, and wrongly pairing
+  // them erases both from the income/expense totals. So a candidate is only
+  // returned when something corroborates it — either leg being a credit card
+  // (the case the whole feature exists for), or the incoming leg already
+  // flagged as a transfer by the message's own wording.
   Future<models.Transaction?> findOffsettingTransaction(
     models.Transaction transaction, {
     Duration window = const Duration(days: 2),
@@ -172,6 +179,20 @@ class TransactionDAO {
     batch.update('transactions', {'is_transfer': 1},
         where: 'id = ?', whereArgs: [id2]);
     await batch.commit(noResult: true);
+  }
+
+  // Whether any SMS-imported row is on file at all.
+  //
+  // Used to tell a meaningful SMS sync high-water mark from a stale one: a
+  // migration that purges auto-imported rows (see DatabaseHelper v5/v8)
+  // leaves the mark pointing at messages whose rows no longer exist, and only
+  // the absence of those rows reveals it. EXISTS rather than COUNT so it
+  // stops at the first hit instead of scanning the table.
+  Future<bool> hasAutoImportedTransactions() async {
+    final db = await _dbHelper.database;
+    final rows = await db.rawQuery(
+        'SELECT EXISTS(SELECT 1 FROM transactions WHERE is_manual = 0) AS any_auto');
+    return (rows.first['any_auto'] as int? ?? 0) == 1;
   }
 
   // Delete SMS-imported transactions that were never linked to a registered
@@ -327,6 +348,28 @@ class TransactionDAO {
     return null;
   }
 
+  // Attach an already-imported row to an account after the fact.
+  //
+  // A message imported before the user had registered the matching account
+  // is stored unassigned; when a later rescan can finally resolve it (see
+  // SMSParserService.saveTransaction), the existing row is adopted rather
+  // than re-inserted — the transaction_id is unchanged, so a plain insert
+  // would be ignored and the row would stay unassigned forever.
+  Future<int> linkTransactionToAccount(int id, int accountId,
+      {required bool needsReview, DatabaseExecutor? txn}) async {
+    final db = txn ?? await _dbHelper.database;
+    return await db.update(
+      'transactions',
+      {
+        'account_id': accountId,
+        'needs_review': needsReview ? 1 : 0,
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   // Update transaction
   Future<int> updateTransaction(models.Transaction transaction) async {
     final db = await _dbHelper.database;
@@ -411,15 +454,68 @@ class TransactionDAO {
 
   // Get total income (credits) for a date range. Excludes transfers (e.g. a
   // credit-card bill payment landing on the card) — those aren't new money.
+  //
+  // [includeTransfers] counts them anyway, for the one view where they belong:
+  // a single credit card's own totals. Money paid to a card is not household
+  // income — it is the user's own cash moving — so every cross-account figure
+  // (dashboard, reports) must leave it out or each bill payment is counted
+  // twice, once as salary and again as a card credit. But read against that
+  // card alone, "what came in" is the bill payments plus refunds; excluding the
+  // payments leaves the card's largest credits invisible in its own summary.
+  // So the flag is scoped per call, and defaults to the safe cross-account
+  // meaning rather than being switched on globally.
   Future<double> getTotalIncome({
     DateTime? startDate,
     DateTime? endDate,
     int? accountId,
+    bool includeTransfers = false,
   }) async {
     final db = await _dbHelper.database;
 
-    final clauses = ['transaction_type = ?', 'is_transfer = 0'];
+    final clauses = ['transaction_type = ?', if (!includeTransfers) 'is_transfer = 0'];
     final whereArgs = <dynamic>['credit'];
+
+    _appendDateRange(clauses, whereArgs, startDate, endDate);
+
+    if (accountId != null) {
+      clauses.add('account_id = ?');
+      whereArgs.add(accountId);
+    }
+
+    final result = await db.rawQuery(
+      'SELECT SUM(amount) as total FROM transactions WHERE ${clauses.join(' AND ')}',
+      whereArgs,
+    );
+
+    return result.first['total'] as double? ?? 0.0;
+  }
+
+  // Total value of transfer legs — the money getTotalIncome/getTotalExpenses
+  // deliberately leave out. Screens showing those two totals over a list that
+  // still displays transfer rows use this to account for the difference,
+  // rather than leaving the user to wonder why a visible ₹50,000 credit
+  // didn't move the income figure.
+  //
+  // [transactionType] ('credit' or 'debit') narrows it to one leg. Both
+  // directions can land on the same account — a card carries incoming bill
+  // payments and the occasional outgoing refund — so a caller explaining what
+  // a specific total does or doesn't contain has to name the matching side, or
+  // the figure it quotes won't reconcile with the one above it.
+  Future<double> getTotalTransfers({
+    DateTime? startDate,
+    DateTime? endDate,
+    int? accountId,
+    String? transactionType,
+  }) async {
+    final db = await _dbHelper.database;
+
+    final clauses = ['is_transfer = 1'];
+    final whereArgs = <dynamic>[];
+
+    if (transactionType != null) {
+      clauses.add('transaction_type = ?');
+      whereArgs.add(transactionType);
+    }
 
     _appendDateRange(clauses, whereArgs, startDate, endDate);
 

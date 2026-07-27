@@ -416,6 +416,25 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   Widget _buildTransactionCard(Transaction transaction) {
+    // Transfer legs move the user's own money rather than earning or spending
+    // it, so they're coloured apart from the rows that feed the income/expense
+    // totals rather than reading as an ordinary credit. See
+    // AccountDetailScreen for the same treatment.
+    //
+    // Whether one counts as income depends on which account is on screen: a
+    // card's own summary folds incoming bill payments into its Total Income,
+    // while every cross-account total leaves them out. Unfiltered, this list
+    // spans both, so it only makes the promise when scoped to the card it
+    // holds for.
+    final isTransfer = transaction.isTransfer;
+    final amountColor = isTransfer
+        ? Colors.blue[300]!
+        : (transaction.isExpense ? Colors.red[400]! : Colors.green[400]!);
+    final transferNote = widget.account?.accountType == 'credit_card' &&
+            !transaction.isExpense
+        ? 'Transfer • counted as income on this card'
+        : 'Transfer • not counted as income';
+
     return Card(
       color: const Color(0xFF1a1a2e),
       margin: const EdgeInsets.only(bottom: 12),
@@ -423,12 +442,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         onTap: () => _editTransaction(transaction),
         contentPadding: const EdgeInsets.all(16),
         leading: CircleAvatar(
-          backgroundColor: transaction.isExpense 
-            ? Colors.red[400]!.withValues(alpha: 0.2)
-            : Colors.green[400]!.withValues(alpha: 0.2),
+          backgroundColor: amountColor.withValues(alpha: 0.2),
           child: Icon(
-            transaction.isExpense ? Icons.remove : Icons.add,
-            color: transaction.isExpense ? Colors.red[400] : Colors.green[400],
+            isTransfer
+                ? Icons.swap_horiz
+                : (transaction.isExpense ? Icons.remove : Icons.add),
+            color: amountColor,
           ),
         ),
         title: Text(
@@ -443,7 +462,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           children: [
             const SizedBox(height: 4),
             Text(
-              '${_formatDate(transaction.transactionDate)} • ${transaction.category}',
+              '${_formatDate(transaction.transactionDate)} • '
+              '${isTransfer ? transferNote : transaction.category}',
               style: TextStyle(color: Colors.grey[400]),
             ),
             if (transaction.merchant != null && transaction.merchant!.isNotEmpty)
@@ -463,7 +483,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             Text(
               transaction.formattedAmount,
               style: TextStyle(
-                color: transaction.isExpense ? Colors.red[400] : Colors.green[400],
+                color: amountColor,
                 fontWeight: FontWeight.w700,
                 fontSize: 16,
               ),

@@ -29,6 +29,15 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
   String _errorMessage = '';
   double _totalExpenses = 0.0;
   double _totalIncome = 0.0;
+  double _totalTransfers = 0.0;
+
+  // On a credit card, the payments that clear the bill are the account's
+  // biggest credits; a "Total Income" for the card that omits them describes
+  // almost nothing that happened on it. Elsewhere they stay excluded — see
+  // TransactionDAO.getTotalIncome for why they must not reach a cross-account
+  // total.
+  bool get _countsTransfersAsIncome =>
+      widget.account.accountType == 'credit_card';
 
   @override
   void initState() {
@@ -49,13 +58,24 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
 
       // Calculate totals
       final expenses = await _transactionDAO.getTotalExpenses(accountId: widget.account.id);
-      final income = await _transactionDAO.getTotalIncome(accountId: widget.account.id);
+      final income = await _transactionDAO.getTotalIncome(
+        accountId: widget.account.id,
+        includeTransfers: _countsTransfersAsIncome,
+      );
+      // Only the leg that matches what the note below says: the credits
+      // folded *into* income on a card, or every transfer left out of both
+      // totals everywhere else.
+      final transfers = await _transactionDAO.getTotalTransfers(
+        accountId: widget.account.id,
+        transactionType: _countsTransfersAsIncome ? 'credit' : null,
+      );
 
       if (!mounted) return;
       setState(() {
         _transactions = transactions;
         _totalExpenses = expenses;
         _totalIncome = income;
+        _totalTransfers = transfers;
         _isLoading = false;
       });
     } catch (e) {
@@ -265,25 +285,55 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
   }
 
   Widget _buildStatisticsCards() {
-    return Row(
+    return Column(
       children: [
-        Expanded(
-          child: _buildStatCard(
-            'Total Income',
-            _totalIncome,
-            Colors.green[400]!,
-            Icons.trending_up,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: _buildStatCard(
+                'Total Income',
+                _totalIncome,
+                Colors.green[400]!,
+                Icons.trending_up,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildStatCard(
+                'Total Expenses',
+                _totalExpenses,
+                Colors.red[400]!,
+                Icons.trending_down,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _buildStatCard(
-            'Total Expenses',
-            _totalExpenses,
-            Colors.red[400]!,
-            Icons.trending_down,
+        // Transfers move the user's own money between their own accounts, so
+        // what the two totals above did with them is never self-evident from
+        // the list below — the same ₹50,000 credit is either counted or not
+        // depending on which account you are looking at. Say which, rather
+        // than leaving a visible row that doesn't reconcile with the figure
+        // over it.
+        if (_totalTransfers > 0) ...[
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Icon(Icons.swap_horiz, size: 14, color: Colors.blue[300]),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  _countsTransfersAsIncome
+                      ? 'Includes ${formatINR(_totalTransfers)} of payments made '
+                          'to this card from your own accounts. These are not '
+                          'counted as income anywhere else.'
+                      : 'Excludes ${formatINR(_totalTransfers)} of transfers between '
+                          'your own accounts (e.g. card bill payments).',
+                  style: TextStyle(color: Colors.grey[500], fontSize: 11),
+                ),
+              ),
+            ],
           ),
-        ),
+        ],
       ],
     );
   }
@@ -408,18 +458,31 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
   }
 
   Widget _buildTransactionTile(Transaction transaction) {
+    // A transfer leg moves the user's own money, so it stays visually apart
+    // from the rows that are plain income or spending. It keeps that colour on
+    // a credit card even though Total Income now counts it: what makes it a
+    // transfer is where the money came from, not whether this particular
+    // screen happens to total it.
+    final isTransfer = transaction.isTransfer;
+    final amountColor = isTransfer
+        ? Colors.blue[300]!
+        : (transaction.isExpense ? Colors.red[400]! : Colors.green[400]!);
+    final transferNote = _countsTransfersAsIncome && !transaction.isExpense
+        ? 'Transfer • counted as income on this card'
+        : 'Transfer • not counted as income';
+
     return Card(
       color: const Color(0xFF1a1a2e),
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
         onTap: () => _navigateToTransactionDetail(transaction),
         leading: CircleAvatar(
-          backgroundColor: transaction.isExpense 
-            ? Colors.red[400]!.withValues(alpha: 0.2)
-            : Colors.green[400]!.withValues(alpha: 0.2),
+          backgroundColor: amountColor.withValues(alpha: 0.2),
           child: Icon(
-            transaction.isExpense ? Icons.remove : Icons.add,
-            color: transaction.isExpense ? Colors.red[400] : Colors.green[400],
+            isTransfer
+                ? Icons.swap_horiz
+                : (transaction.isExpense ? Icons.remove : Icons.add),
+            color: amountColor,
           ),
         ),
         title: Text(
@@ -430,7 +493,8 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
           ),
         ),
         subtitle: Text(
-          '${_formatDate(transaction.transactionDate)} • ${transaction.category}',
+          '${_formatDate(transaction.transactionDate)} • '
+          '${isTransfer ? transferNote : transaction.category}',
           style: TextStyle(color: Colors.grey[400]),
         ),
         trailing: Column(
@@ -440,7 +504,7 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
             Text(
               transaction.formattedAmount,
               style: TextStyle(
-                color: transaction.isExpense ? Colors.red[400] : Colors.green[400],
+                color: amountColor,
                 fontWeight: FontWeight.w600,
               ),
             ),

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/account.dart';
 import '../database/account_dao.dart';
+import '../services/sms_service.dart';
+import '../utils/app_logger.dart';
 
 class AddAccountScreen extends StatefulWidget {
   final Account? existingAccount;
@@ -500,10 +502,20 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
         await _accountDAO.insertAccount(account);
       }
 
+      // Bank SMSes read before this account existed were imported unassigned
+      // and can now be attached to it. A full rescan is what re-links them
+      // (see SMSParserService.saveTransaction) -- without this the user would
+      // have to know to trigger "Rescan all messages" from Settings by hand,
+      // and their statement would look empty until they did.
+      final rescanned = await _relinkExistingMessages();
+
       if (mounted) {
+        final what = isEditing ? 'Account updated' : 'Account added';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(isEditing ? 'Account updated successfully!' : 'Account added successfully!'),
+            content: Text(rescanned
+                ? '$what. Existing messages re-checked for this account.'
+                : '$what successfully!'),
             backgroundColor: Colors.green,
           ),
         );
@@ -515,6 +527,22 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
         _errorMessage = 'Failed to save account: ${e.toString()}';
         _isLoading = false;
       });
+    }
+  }
+
+  // Re-reads the inbox so messages that arrived before this account existed
+  // get attached to it. Returns whether the scan actually ran. Never fails
+  // the save: the account itself is already committed by this point, and the
+  // same rescan is available from Settings if this one couldn't run.
+  Future<bool> _relinkExistingMessages() async {
+    try {
+      final smsService = SMSService();
+      if (!await smsService.isPermissionGranted()) return false;
+      await smsService.syncMessages(fullSync: true);
+      return true;
+    } catch (e, stackTrace) {
+      AppLogger.error('Re-link scan after saving account failed', e, stackTrace);
+      return false;
     }
   }
 }

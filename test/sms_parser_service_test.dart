@@ -353,6 +353,83 @@ void main() {
       );
       expect(txn, isNull);
     });
+
+    test('monthly card statement notification is rejected', () async {
+      // The amount quoted is the whole cycle's outstanding balance, i.e. the
+      // sum of purchases already imported one by one from their own alerts --
+      // importing it too booked a phantom expense every month, each roughly
+      // the size of that month's real spending.
+      final txn = await parser.parseSMS(
+        'Statement for your ICICI Bank Credit Card XX4016 has been sent to '
+        'sagar***@gmail.com. Total Amt Due Rs 77,368.67, Min Amt Due Rs 3,870.00, '
+        'payable by 03-Aug-26.',
+        'AD-ICICIT',
+      );
+      expect(txn, isNull);
+    });
+
+    test('statement notification is rejected on the statement wording alone',
+        () async {
+      // No 'amt due'/'payable by' to catch it, and it carries a full
+      // transaction signature (amount + card token + the verb 'spent', plus
+      // 'sent' from "has been sent to"), so only the statement check can
+      // veto this one.
+      final txn = await parser.parseSMS(
+        'Statement for your ICICI Bank Credit Card XX4016 for Jul-26 has been '
+        'sent to sagar***@gmail.com. You spent Rs 77,368.67 this cycle.',
+        'AD-ICICIT',
+      );
+      expect(txn, isNull);
+    });
+
+    test('a real payment to a person is still parsed despite saying "sent to"',
+        () async {
+      // The statement veto is a conjunction for exactly this reason: 'sent'
+      // and 'sent to' are ordinary transaction wording on their own.
+      final txn = await parser.parseSMS(
+        'Rs 500.00 sent to Ravi Kumar from your ICICI Bank Account XX340 on '
+        '15-Jul-26. UPI:123456789.',
+        'VM-ICICIB',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.transactionType, 'debit');
+      expect(txn.amount, 500.00);
+    });
+
+    test('a refund that mentions the statement it lands on is still parsed',
+        () async {
+      // Regression: an earlier, broader version of the statement veto keyed on
+      // cycle-summary wording ('amt due', 'total due', 'payable by') and on
+      // 'statement' near 'generated'. Refund alerts carry exactly that
+      // phrasing, so every refund on the card stopped importing and the
+      // account's income collapsed from ~18,500 to 2.
+      final txn = await parser.parseSMS(
+        'Rs 644.00 has been credited to your ICICI Bank Credit Card XX4016 on '
+        '04-Sep-25 towards a refund. It will reflect in the statement generated '
+        'for this cycle. Total Amt Due Rs 12,000.00, payable by 03-Oct-25.',
+        'AD-ICICIT',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.transactionType, 'credit');
+      expect(txn.amount, 644.00);
+    });
+
+    test('a purchase that merely mentions the next statement is still parsed',
+        () async {
+      // 'statement' without any delivery marker is not a statement
+      // notification -- plenty of genuine alerts refer to one in passing.
+      final txn = await parser.parseSMS(
+        'INR 2,082.60 spent using ICICI Bank Card XX4016 on 26-Jul-26 on AMAZON. '
+        'This will appear in your next statement.',
+        'AD-ICICIT',
+      );
+
+      expect(txn, isNotNull);
+      expect(txn!.transactionType, 'debit');
+      expect(txn.amount, 2082.60);
+    });
   });
 
   group('wallet messages (Blinkit)', () {

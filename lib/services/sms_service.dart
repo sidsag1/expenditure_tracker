@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/transaction.dart';
 import '../database/database_helper.dart';
+import '../database/transaction_dao.dart';
 import '../utils/constants.dart';
 import 'sms_parser_service.dart';
 
@@ -88,6 +89,22 @@ class SMSService {
     return getInboxMessageStream(since: since, filterSenders: allSenders);
   }
 
+  // Whether the stored high-water mark can still be trusted to mean "every
+  // message older than this is already imported".
+  //
+  // It can't once no SMS-imported row remains: a schema migration that wipes
+  // them (DatabaseHelper v5 and v8 both do, to force a re-parse through a
+  // fixed parser) leaves the watermark pointing at messages whose
+  // transactions no longer exist, so the next incremental sync would skip the
+  // entire back-catalogue and the user would silently lose their history
+  // instead of having it rebuilt. Falling back to a full scan here is what
+  // makes those migrations safe.
+  //
+  // On a fresh install the count is also zero, so the first sync is a full
+  // one -- which is what it has to be anyway.
+  Future<bool> _watermarkIsStale() async =>
+      !await TransactionDAO().hasAutoImportedTransactions();
+
   // Read the inbox, parse every bank message into a transaction, and save it.
   //
   // Concurrency: a second call while one is already running would race the
@@ -101,7 +118,9 @@ class SMSService {
         return 0;
       }
 
-      final since = fullSync ? 0 : (_prefs.getInt(_lastSyncTimeKey) ?? 0);
+      final since = (fullSync || await _watermarkIsStale())
+          ? 0
+          : (_prefs.getInt(_lastSyncTimeKey) ?? 0);
       final parser = SMSParserService();
 
       int saved = 0;
