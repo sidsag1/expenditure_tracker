@@ -51,10 +51,8 @@ class SMSParserService {
           break;
       }
 
-      if (transaction == null) {
-        // Try generic parsing
-        transaction = _parseGenericMessage(message, bankName, receivedAt);
-      }
+      // Try generic parsing
+      transaction ??= _parseGenericMessage(message, bankName, receivedAt);
 
       if (transaction != null) {
         // Set bank name, account type and the fields that don't depend on
